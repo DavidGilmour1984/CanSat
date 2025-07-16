@@ -1,0 +1,183 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <TinyGPS++.h>
+#include <SD.h>
+#include <SPI.h>
+#include <ESP32Servo.h>
+
+#define rxGPS 16
+#define txGPS 17
+#define PIN_SPI_CS 5
+#define VOLTAGE_PIN 36
+#define BUZZER_PIN 27
+#define SERVO_PIN 4
+
+Adafruit_BMP280 bmp;
+Adafruit_MPU6050 mpu;
+HardwareSerial GPSSerial(1);
+TinyGPSPlus gps;
+Servo servo;
+File myFile;
+String filename;
+
+float baseAltitude = 0;
+float maxBMPAltitude = -10000.0;
+unsigned long startTime;
+unsigned long lastSDWrite = 0;
+unsigned long lastSerialPrint = 0;
+bool deploymentTriggered = false;
+bool hasPassed300m = false;
+
+float lastValidLatitude = 0.0;
+float lastValidLongitude = 0.0;
+float lastValidGPSAltitude = NAN;
+float lastValidHDOP = NAN;
+bool gpsDataAvailable = false;
+
+char hdopToGrade(float hdop) {
+  if (hdop < 1) return 'A';
+  else if (hdop < 2) return 'B';
+  else if (hdop < 3) return 'C';
+  else if (hdop < 4) return 'D';
+  else if (hdop < 5) return 'E';
+  else if (hdop < 6) return 'F';
+  else return 'G';
+}
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) delay(100);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  noTone(BUZZER_PIN);
+
+  servo.attach(SERVO_PIN);
+  servo.write(0);
+
+  if (!bmp.begin(0x76)) {
+    Serial.println("BMP280 not found!");
+    while (1);
+  }
+  baseAltitude = bmp.readAltitude(1013.25);
+
+  GPSSerial.begin(9600, SERIAL_8N1, rxGPS, txGPS);
+
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+
+  if (!SD.begin(PIN_SPI_CS)) {
+    Serial.println("SD Card init failed!");
+    return;
+  }
+
+  int fileIndex = 1;
+  do {
+    filename = "/data_" + String(fileIndex) + ".csv";
+    fileIndex++;
+  } while (SD.exists(filename));
+
+  myFile = SD.open(filename, FILE_WRITE);
+  if (myFile) {
+    myFile.println("Time (s), AccelerationZ (m/s²), BMP Altitude (m), Max BMP Altitude (m), GPS Altitude (m), Latitude, Longitude, HDOP, Voltage (V), Status");
+    myFile.close();
+  }
+
+  startTime = millis();
+}
+
+void loop() {
+  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
+  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
+
+  while (GPSSerial.available()) {
+    gps.encode(GPSSerial.read());
+  }
+
+  if (gps.location.isValid()) {
+    lastValidLatitude = gps.location.lat();
+    lastValidLongitude = gps.location.lng();
+    if (gps.altitude.isValid()) {
+      lastValidGPSAltitude = gps.altitude.meters();
+    }
+    if (gps.hdop.isValid()) {
+      lastValidHDOP = gps.hdop.hdop();
+    }
+    gpsDataAvailable = true;
+  }
+
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  float accelerationZ = a.acceleration.z;
+
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 3.1;
+
+  String status = "Armed";
+  unsigned long currentMillis = millis();
+  float elapsed = (currentMillis - startTime) / 1000.0;
+
+  if (elapsed < 60) {
+    status = "Safe";
+  } else if (!deploymentTriggered) {
+    if (bmpAltitude >= 300) {
+      hasPassed300m = true;
+    }
+    if (hasPassed300m && bmpAltitude <= 150) {
+      servo.write(90);
+      tone(BUZZER_PIN, 500);
+      deploymentTriggered = true;
+      status = "Fired";
+    }
+  } else {
+    status = "Fired";
+  }
+
+  // Write to SD every 0.1s
+  static bool lastWriteSuccess = false;
+  if (currentMillis - lastSDWrite >= 100) {
+    lastSDWrite = currentMillis;
+
+    String csv = String(elapsed, 1) + ", " +
+                 String(accelerationZ, 1) + ", " +
+                 String(bmpAltitude, 1) + ", " +
+                 String(maxBMPAltitude, 1) + ", " +
+                 (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude)) + ", " +
+                 (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0, 0") + ", " +
+                 (isnan(lastValidHDOP) ? "0" : String(lastValidHDOP, 1)) + ", " +
+                 String(voltage, 1) + ", " +
+                 status;
+
+    myFile = SD.open(filename, FILE_APPEND);
+    if (myFile) {
+      myFile.println(csv + ", OK");
+      myFile.close();
+      lastWriteSuccess = true;
+    } else {
+      lastWriteSuccess = false;
+    }
+  }
+
+  // Print to serial every 2s
+  if (currentMillis - lastSerialPrint >= 2000) {
+    lastSerialPrint = currentMillis;
+
+    char statusChar = lastWriteSuccess ? 'A' : 'B';
+    char hdopChar = (isnan(lastValidHDOP)) ? 'G' : hdopToGrade(lastValidHDOP);
+
+    String latStr = String(fabs(lastValidLatitude), 6);
+    String longStr = String(fabs(lastValidLongitude), 6);
+
+    String latDec = latStr.substring(latStr.indexOf('.') + 1);
+    String longDec = longStr.substring(longStr.indexOf('.') + 1);
+
+    Serial.print(String(bmpAltitude, 1));
+    Serial.print(statusChar);
+    Serial.print(latDec);
+    Serial.print(hdopChar);
+    Serial.println(longDec);
+  }
+}
