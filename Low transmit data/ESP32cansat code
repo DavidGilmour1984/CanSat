@@ -33,17 +33,13 @@ bool hasPassed300m = false;
 float lastValidLatitude = 0.0;
 float lastValidLongitude = 0.0;
 float lastValidGPSAltitude = NAN;
-float lastValidHDOP = NAN;
 bool gpsDataAvailable = false;
 
-char hdopToGrade(float hdop) {
-  if (hdop < 1) return 'A';
-  else if (hdop < 2) return 'B';
-  else if (hdop < 3) return 'C';
-  else if (hdop < 4) return 'D';
-  else if (hdop < 5) return 'E';
-  else if (hdop < 6) return 'F';
-  else return 'G';
+char voltageToGrade(float v) {
+  int index = round((4.2 - v) * 10);  // A=4.2, B=4.1, ..., P=2.5
+  if (index < 0) index = 0;
+  if (index > 15) return 'Q'; // Below 2.5V
+  return 'A' + index;
 }
 
 void setup() {
@@ -83,7 +79,7 @@ void setup() {
 
   myFile = SD.open(filename, FILE_WRITE);
   if (myFile) {
-    myFile.println("Time (s), AccelerationZ (m/s²), BMP Altitude (m), Max BMP Altitude (m), GPS Altitude (m), Latitude, Longitude, HDOP, Voltage (V), Status");
+    myFile.println("Time (s), AccelerationZ (m/s²), BMP Altitude (m), Max BMP Altitude (m), GPS Altitude (m), Latitude, Longitude, Voltage (V), Status");
     myFile.close();
   }
 
@@ -101,12 +97,7 @@ void loop() {
   if (gps.location.isValid()) {
     lastValidLatitude = gps.location.lat();
     lastValidLongitude = gps.location.lng();
-    if (gps.altitude.isValid()) {
-      lastValidGPSAltitude = gps.altitude.meters();
-    }
-    if (gps.hdop.isValid()) {
-      lastValidHDOP = gps.hdop.hdop();
-    }
+    if (gps.altitude.isValid()) lastValidGPSAltitude = gps.altitude.meters();
     gpsDataAvailable = true;
   }
 
@@ -114,7 +105,7 @@ void loop() {
   mpu.getEvent(&a, &g, &temp);
   float accelerationZ = a.acceleration.z;
 
-  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 3.1;
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.38;
 
   String status = "Armed";
   unsigned long currentMillis = millis();
@@ -123,9 +114,7 @@ void loop() {
   if (elapsed < 60) {
     status = "Safe";
   } else if (!deploymentTriggered) {
-    if (bmpAltitude >= 300) {
-      hasPassed300m = true;
-    }
+    if (bmpAltitude >= 300) hasPassed300m = true;
     if (hasPassed300m && bmpAltitude <= 150) {
       servo.write(90);
       tone(BUZZER_PIN, 500);
@@ -136,8 +125,8 @@ void loop() {
     status = "Fired";
   }
 
-  // Write to SD every 0.1s
   static bool lastWriteSuccess = false;
+  static String lastStatus = "Armed";
   if (currentMillis - lastSDWrite >= 100) {
     lastSDWrite = currentMillis;
 
@@ -147,7 +136,6 @@ void loop() {
                  String(maxBMPAltitude, 1) + ", " +
                  (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude)) + ", " +
                  (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0, 0") + ", " +
-                 (isnan(lastValidHDOP) ? "0" : String(lastValidHDOP, 1)) + ", " +
                  String(voltage, 1) + ", " +
                  status;
 
@@ -156,28 +144,33 @@ void loop() {
       myFile.println(csv + ", OK");
       myFile.close();
       lastWriteSuccess = true;
+      lastStatus = status;
     } else {
       lastWriteSuccess = false;
     }
   }
 
-  // Print to serial every 2s
   if (currentMillis - lastSerialPrint >= 2000) {
     lastSerialPrint = currentMillis;
 
-    char statusChar = lastWriteSuccess ? 'A' : 'B';
-    char hdopChar = (isnan(lastValidHDOP)) ? 'G' : hdopToGrade(lastValidHDOP);
+    char statusChar = 'X';  // default = SD failed
+    if (lastWriteSuccess) {
+      if (lastStatus == "Safe") statusChar = 'S';
+      else if (lastStatus == "Armed") statusChar = 'A';
+      else if (lastStatus == "Fired") statusChar = 'F';
+    }
+
+    char voltageChar = voltageToGrade(voltage);
 
     String latStr = String(fabs(lastValidLatitude), 6);
     String longStr = String(fabs(lastValidLongitude), 6);
-
     String latDec = latStr.substring(latStr.indexOf('.') + 1);
     String longDec = longStr.substring(longStr.indexOf('.') + 1);
 
-    Serial.print(String(bmpAltitude, 1));
+    Serial.print(String((int)round(bmpAltitude)));
     Serial.print(statusChar);
     Serial.print(latDec);
-    Serial.print(hdopChar);
+    Serial.print(voltageChar);
     Serial.println(longDec);
   }
 }
