@@ -96,6 +96,23 @@
       font-family: 'Orbitron', sans-serif;
       margin-bottom: 0.5em;
     }
+
+    .config {
+      text-align: center;
+      margin-top: 1em;
+      color: #ccc;
+    }
+
+    .config input {
+      width: 4em;
+      font-size: 1em;
+      text-align: center;
+      margin: 0 0.5em;
+    }
+
+    .config label {
+      margin-right: 1em;
+    }
   </style>
 </head>
 <body>
@@ -105,6 +122,11 @@
     <button onclick="showInstructions()">Instructions</button>
     <button onclick="connectSerial()">Connect to CanSat</button>
     <button onclick="downloadExcel()">Export Data</button>
+  </div>
+
+  <div class="config">
+    <label>Latitude Prefix: <input type="number" id="latPrefix" value="-37"></label>
+    <label>Longitude Prefix: <input type="number" id="lonPrefix" value="175"></label>
   </div>
 
   <div id="container">
@@ -129,95 +151,140 @@
     </div>
   </div>
 
-  <script>
-    let port, reader;
-    let startTime = null;
-    let buffer = "";
-    const parsedDataLog = [];
+ <!-- everything up to <script> remains unchanged -->
 
-    async function connectSerial() {
-      try {
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 9600 });
+<script>
+  let port, reader;
+  let startTime = null;
+  let buffer = "";
+  const parsedDataLog = [];
 
-        const decoder = new TextDecoderStream();
-        port.readable.pipeTo(decoder.writable);
-        reader = decoder.readable.getReader();
+  async function connectSerial() {
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 9600 });
 
-        readLoop();
-      } catch (err) {
-        alert("Serial connection failed: " + err);
-      }
+      const decoder = new TextDecoderStream();
+      port.readable.pipeTo(decoder.writable);
+      reader = decoder.readable.getReader();
+
+      readLoop();
+    } catch (err) {
+      alert("Serial connection failed: " + err);
     }
+  }
 
-    async function readLoop() {
-      const telemetry = document.getElementById("telemetry");
-      const streamBox = document.getElementById("stream");
+  async function readLoop() {
+    const telemetry = document.getElementById("telemetry");
+    const streamBox = document.getElementById("stream");
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
 
-        buffer += value;
+      buffer += value;
 
-        let newlineIndex;
-        while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
 
-          if (!startTime) startTime = performance.now();
-          const now = performance.now();
-          const elapsed = ((now - startTime) / 1000).toFixed(1);
-          const timestamp = new Date().toLocaleTimeString();
+        if (!startTime) startTime = performance.now();
+        const now = performance.now();
+        const elapsed = ((now - startTime) / 1000).toFixed(1);
+        const timestamp = new Date().toLocaleTimeString();
 
-          const match = line.match(/^(-?[\d.]+)([AB])([\d]{6})([A-G])([\d]{6})$/);
-          if (match) {
-            const [, altitude, sdStatus, latDec, hdop, lonDec] = match;
-            const hdopRanges = {
-              A: "0–1", B: "1–2", C: "2–3", D: "3–4", E: "4–5", F: "5–6", G: "6+"
-            };
+        const match = line.match(/^(-?\d+)([SAFX])(\d{6})([A-PQ])(\d{6})$/);
+        if (match) {
+          const [, altitude, status, latDec, voltageGrade, lonDec] = match;
 
-            // Log to telemetry table
-            telemetry.innerHTML = `
-              <tr><td>Altitude (m)</td><td>${altitude}</td><td>${altitude}</td></tr>
-              <tr><td>SD Card Status</td><td>${sdStatus}</td><td>${sdStatus === 'A' ? 'OK' : 'FAIL'}</td></tr>
-              <tr><td>Latitude (.XXXXXX)</td><td>${latDec}</td><td>0.${latDec}</td></tr>
-              <tr><td>HDOP Grade</td><td>${hdop}</td><td>${hdop} (${hdopRanges[hdop]})</td></tr>
-              <tr><td>Longitude (.XXXXXX)</td><td>${lonDec}</td><td>0.${lonDec}</td></tr>`;
+          const latPrefix = document.getElementById("latPrefix").value || "-37";
+          const lonPrefix = document.getElementById("lonPrefix").value || "175";
+          const fullLat = `${latPrefix}.${latDec}`;
+          const fullLon = `${lonPrefix}.${lonDec}`;
 
-            // Log parsed data to history
-            parsedDataLog.push({
-              Time: timestamp,
-              Altitude_m: altitude,
-              SD_Status: sdStatus === 'A' ? 'OK' : 'FAIL',
-              Latitude: `0.${latDec}`,
-              Longitude: `0.${lonDec}`,
-              HDOP: `${hdop} (${hdopRanges[hdop]})`
-            });
+          const missionStatusLabels = {
+            S: "Safe", A: "Armed", F: "Fired"
+          };
 
-            // Add to stream
-            streamBox.innerHTML += `[${timestamp} | +${elapsed}s] Alt:${altitude}m  SD:${sdStatus}  Lat:0.${latDec}  Lon:0.${lonDec}  HDOP:${hdop}\n`;
-            streamBox.scrollTop = streamBox.scrollHeight;
+          const sdCardStatus = status === "X" ? "FAIL" : "OK";
+          const missionStatus = missionStatusLabels[status] || "Unknown";
+
+          let voltageValue = "<2.5 V";
+          const code = voltageGrade.charCodeAt(0);
+          if (code >= 65 && code <= 80) {
+            voltageValue = (4.2 - (code - 65) * 0.1).toFixed(1) + " V";
           }
+
+          telemetry.innerHTML = `
+            <tr><td>Altitude (m)</td><td>${altitude}</td><td>${altitude}</td></tr>
+            <tr><td>SD Card Status</td><td>${status}</td><td>${sdCardStatus}</td></tr>
+            <tr><td>Mission Status</td><td>${status}</td><td>${missionStatus}</td></tr>
+            <tr><td>Latitude</td><td>${latDec}</td><td>${fullLat}</td></tr>
+            <tr><td>Longitude</td><td>${lonDec}</td><td>${fullLon}</td></tr>
+            <tr><td>Voltage Code</td><td>${voltageGrade}</td><td>${voltageValue}</td></tr>`;
+
+          parsedDataLog.push({
+            Time: timestamp,
+            Altitude: altitude,
+            SD_Status: sdCardStatus,
+            Mission_Status: missionStatus,
+            Latitude: fullLat,
+            Longitude: fullLon,
+            Voltage: voltageValue
+          });
+
+          streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line}\n` + streamBox.innerHTML;
+          streamBox.scrollTop = 0;
         }
       }
     }
+  }
 
-    function downloadExcel() {
-      if (parsedDataLog.length === 0) {
-        alert("No data to export yet.");
-        return;
-      }
-
-      const worksheet = XLSX.utils.json_to_sheet(parsedDataLog);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Parsed Telemetry");
-      XLSX.writeFile(workbook, "parsed_telemetry_data.xlsx");
+  function downloadExcel() {
+    if (parsedDataLog.length === 0) {
+      alert("No data to export yet.");
+      return;
     }
 
-    function showInstructions() {
-      alert(`INSTRUCTIONS:\n\nConnect to the CanSat via serial and monitor live telemetry.\n\nExported Excel includes:\n- Timestamp\n- Altitude\n- SD status\n- Latitude\n- Longitude\n- HDOP range\n\nSerial format: <Altitude><SD><Lat><HDOP><Lon>\nExample: 154.2A654321C987654`);
-    }
-  </script>
+    const worksheet = XLSX.utils.json_to_sheet(parsedDataLog);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Parsed Telemetry");
+    XLSX.writeFile(workbook, "parsed_telemetry_data.xlsx");
+  }
+
+function showInstructions() {
+  alert(`INSTRUCTIONS:
+
+1. Click "Connect to CanSat" to start the serial connection.
+2. Incoming serial format: <Altitude><Status><LatDec><VoltageCode><LonDec>
+   Example: 328A802044B369736
+
+Field breakdown:
+- Altitude: Integer in meters (e.g., 328)
+- Status:
+    - 'S' = Safe (under 60s)
+    - 'A' = Armed (above 300m)
+    - 'F' = Fired (below 150m after arming)
+    - 'X' = SD card write failure
+- LatDec / LonDec: Six-digit decimal parts of latitude and longitude
+- Voltage Code:
+    - 'A' = 4.2V
+    - 'B' = 4.1V
+    - ...
+    - 'P' = 2.5V
+    - 'Q' = <2.5V
+
+3. The dashboard will interpret:
+   - SD Card Status: 'OK' if not 'X', otherwise 'FAIL'
+   - Mission Status: derived from 'S', 'A', or 'F'
+   - Voltage Code: converted to actual voltage
+   - Coordinates: built from user-defined prefixes and decimal parts
+
+4. You can change the Latitude and Longitude prefix at the top of the page.`);
+}
+
+</script>
+
 </body>
 </html>
