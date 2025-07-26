@@ -5,7 +5,6 @@
 #include <TinyGPS++.h>
 #include <SD.h>
 #include <SPI.h>
-#include <ESP32Servo.h>
 
 #define rxGPS 16
 #define txGPS 17
@@ -14,11 +13,14 @@
 #define BUZZER_PIN 27
 #define SERVO_PIN 4
 
+#define SERVO_PWM_CHANNEL 0
+#define SERVO_FREQ 50
+#define SERVO_RES 16
+
 Adafruit_BMP280 bmp;
 Adafruit_MPU6050 mpu;
 HardwareSerial GPSSerial(1);
 TinyGPSPlus gps;
-Servo servo;
 File myFile;
 String filename;
 
@@ -36,10 +38,16 @@ float lastValidGPSAltitude = NAN;
 bool gpsDataAvailable = false;
 
 char voltageToGrade(float v) {
-  int index = round((4.2 - v) * 10);  // A=4.2, B=4.1, ..., P=2.5
+  int index = round((4.2 - v) * 10);
   if (index < 0) index = 0;
-  if (index > 15) return 'Q'; // Below 2.5V
+  if (index > 15) return 'Q';
   return 'A' + index;
+}
+
+int angleToDuty(int angle) {
+  int dutyMin = 3277;
+  int dutyMax = 6553;
+  return map(angle, 0, 180, dutyMin, dutyMax);
 }
 
 void setup() {
@@ -47,10 +55,11 @@ void setup() {
   while (!Serial) delay(100);
 
   pinMode(BUZZER_PIN, OUTPUT);
-  noTone(BUZZER_PIN);
+  digitalWrite(BUZZER_PIN, LOW);
 
-  servo.attach(SERVO_PIN);
-  servo.write(0);
+  ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+  ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(0));
 
   if (!bmp.begin(0x76)) {
     Serial.println("BMP280 not found!");
@@ -68,38 +77,36 @@ void setup() {
 
   if (!SD.begin(PIN_SPI_CS)) {
     Serial.println("SD Card init failed!");
-    return;
-  }
-
-  int fileIndex = 1;
-  do {
-    filename = "/data_" + String(fileIndex) + ".csv";
-    fileIndex++;
-  } while (SD.exists(filename));
-
-  myFile = SD.open(filename, FILE_WRITE);
-  if (myFile) {
-    myFile.println("Time (s), AccelerationZ (m/s²), BMP Altitude (m), Max BMP Altitude (m), GPS Altitude (m), Latitude, Longitude, Voltage (V), Status");
-    myFile.close();
+  } else {
+    int fileIndex = 1;
+    do {
+      filename = "/data_" + String(fileIndex) + ".csv";
+      fileIndex++;
+    } while (SD.exists(filename));
+    myFile = SD.open(filename, FILE_WRITE);
+    if (myFile) {
+      myFile.println("Time (s), AccZ (m/s²), Alt (m), MaxAlt (m), GPS Alt, Lat, Lon, Voltage, Status");
+      myFile.close();
+    }
   }
 
   startTime = millis();
 }
 
 void loop() {
-  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
-  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
+  unsigned long currentMillis = millis();
+  float elapsed = (currentMillis - startTime) / 1000.0;
 
-  while (GPSSerial.available()) {
-    gps.encode(GPSSerial.read());
-  }
-
+  while (GPSSerial.available()) gps.encode(GPSSerial.read());
   if (gps.location.isValid()) {
     lastValidLatitude = gps.location.lat();
     lastValidLongitude = gps.location.lng();
     if (gps.altitude.isValid()) lastValidGPSAltitude = gps.altitude.meters();
     gpsDataAvailable = true;
   }
+
+  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
+  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
 
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
@@ -108,16 +115,14 @@ void loop() {
   float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.38;
 
   String status = "Armed";
-  unsigned long currentMillis = millis();
-  float elapsed = (currentMillis - startTime) / 1000.0;
-
-  if (elapsed < 60) {
-    status = "Safe";
-  } else if (!deploymentTriggered) {
+  if (elapsed < 60) status = "Safe";
+  else if (!deploymentTriggered) {
     if (bmpAltitude >= 300) hasPassed300m = true;
     if (hasPassed300m && bmpAltitude <= 150) {
-      servo.write(90);
-      tone(BUZZER_PIN, 500);
+      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90));
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(500);
+      digitalWrite(BUZZER_PIN, LOW);
       deploymentTriggered = true;
       status = "Fired";
     }
@@ -125,52 +130,32 @@ void loop() {
     status = "Fired";
   }
 
-  static bool lastWriteSuccess = false;
-  static String lastStatus = "Armed";
   if (currentMillis - lastSDWrite >= 100) {
     lastSDWrite = currentMillis;
-
-    String csv = String(elapsed, 1) + ", " +
-                 String(accelerationZ, 1) + ", " +
-                 String(bmpAltitude, 1) + ", " +
-                 String(maxBMPAltitude, 1) + ", " +
+    String csv = String(elapsed, 1) + ", " + String(accelerationZ, 1) + ", " +
+                 String(bmpAltitude, 1) + ", " + String(maxBMPAltitude, 1) + ", " +
                  (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude)) + ", " +
-                 (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0, 0") + ", " +
-                 String(voltage, 1) + ", " +
-                 status;
+                 (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0,0") + ", " +
+                 String(voltage, 1) + ", " + status;
 
     myFile = SD.open(filename, FILE_APPEND);
     if (myFile) {
       myFile.println(csv + ", OK");
       myFile.close();
-      lastWriteSuccess = true;
-      lastStatus = status;
-    } else {
-      lastWriteSuccess = false;
     }
   }
 
   if (currentMillis - lastSerialPrint >= 2000) {
     lastSerialPrint = currentMillis;
-
-    char statusChar = 'X';  // default = SD failed
-    if (lastWriteSuccess) {
-      if (lastStatus == "Safe") statusChar = 'S';
-      else if (lastStatus == "Armed") statusChar = 'A';
-      else if (lastStatus == "Fired") statusChar = 'F';
-    }
-
+    char statusChar = (status == "Safe" ? 'S' : (status == "Fired" ? 'F' : 'A'));
     char voltageChar = voltageToGrade(voltage);
 
     String latStr = String(fabs(lastValidLatitude), 6);
-    String longStr = String(fabs(lastValidLongitude), 6);
+    String lonStr = String(fabs(lastValidLongitude), 6);
     String latDec = latStr.substring(latStr.indexOf('.') + 1);
-    String longDec = longStr.substring(longStr.indexOf('.') + 1);
+    String lonDec = lonStr.substring(lonStr.indexOf('.') + 1);
 
-    Serial.print(String((int)round(bmpAltitude)));
-    Serial.print(statusChar);
-    Serial.print(latDec);
-    Serial.print(voltageChar);
-    Serial.println(longDec);
+    String telemetry = String((int)round(bmpAltitude)) + statusChar + latDec + voltageChar + lonDec;
+    Serial.println(telemetry);
   }
 }
