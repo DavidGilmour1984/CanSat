@@ -5,132 +5,173 @@
   <title>CanSat Telemetry Dashboard</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: 'Segoe UI', sans-serif;
-      background: #111216;
-      color: #eee;
+      font-family: 'Helvetica', sans-serif;
+      background: #080b10;
+      color: #ffffff;
       margin: 0;
-      padding: 2em;
+      padding: 0;
     }
 
     h1 {
       text-align: center;
-      font-size: 2.4em;
-      color: #42aaff;
+      font-size: 3em;
+      padding: 1em 0;
+      color: #00c6ff;
       font-family: 'Orbitron', sans-serif;
-      letter-spacing: 1px;
     }
 
-    #container {
+    #main-layout {
       display: flex;
-      gap: 2em;
-      flex-wrap: wrap;
-      justify-content: center;
+      flex-direction: row;
+      gap: 0;
     }
 
-    #left, #right {
-      flex: 1 1 400px;
-      background: #1e1f26;
-      border-radius: 12px;
+    .panel {
       padding: 1em;
-      box-shadow: 0 0 10px rgba(66, 170, 255, 0.1);
+    }
+
+    #left-panel {
+      width: 30%;
+      background: #11131a;
+      border-right: 2px solid #0d1928;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    #middle-panel {
+      width: 30%;
+      background: #151920;
+      border-right: 2px solid #0d1928;
+    }
+
+    #right-panel {
+      width: 40%;
+      background: #0e1117;
     }
 
     button {
-      font-size: 1em;
-      padding: 0.6em 1.4em;
-      margin: 0.5em 0.5em 1em 0;
-      background: #42aaff;
+      display: block;
+      width: 90%;
+      margin: 1em auto;
+      padding: 1em;
+      font-size: 1.2em;
+      background: linear-gradient(to right, #00c6ff, #0072ff);
       color: #fff;
       border: none;
-      border-radius: 6px;
+      border-radius: 8px;
       cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
+      transition: all 0.2s ease;
+      box-shadow: 0 0 6px #00c6ff66;
     }
 
     button:hover {
-      background: #2d8cd8;
+      background: linear-gradient(to right, #0072ff, #00c6ff);
+      transform: scale(1.02);
+      box-shadow: 0 0 10px #00c6ffbb;
     }
 
-    button:active {
-      transform: scale(0.98);
+    .config {
+      text-align: center;
+      margin-top: 2em;
+    }
+
+    .config label {
+      display: block;
+      margin: 1.5em auto 0.5em;
+      width: 90%;
+      font-size: 1.1em;
+      color: #ffffff;
+    }
+
+    .config input {
+      width: 100%;
+      font-size: 1.1em;
+      padding: 0.8em;
+      text-align: center;
+      border-radius: 8px;
+      border: none;
+      background: #1a1e25;
+      color: #ffffff;
+      box-shadow: inset 0 0 2px #00c6ff66;
+      outline: none;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 1em;
       margin-top: 1em;
+      font-size: 1em;
     }
 
     th, td {
       border: 1px solid #333;
       padding: 10px;
       text-align: center;
-      background: #2a2d36;
-      color: #e0e6ed;
     }
 
     th {
-      background: #37414f;
-      color: #42aaff;
-      font-weight: 600;
+      background-color: #0e1823;
+      color: #00c6ff;
+    }
+
+    td {
+      background-color: #1d212c;
+      color: #ffffff;
     }
 
     #stream {
-      background: #0d0d0d;
-      color: #33ff99;
       font-family: monospace;
       font-size: 0.9em;
-      height: 400px;
-      overflow-y: auto;
+      height: 70vh;
       padding: 1em;
-      border-radius: 8px;
       white-space: pre-line;
-      border: 1px solid #333;
+      overflow-y: auto;
+      border-left: 2px solid #0d1928;
+      color: #00ffcc;
+      background: #0a0c10;
     }
 
     h2 {
-      color: #42aaff;
-      font-size: 1.3em;
       font-family: 'Orbitron', sans-serif;
-      margin-bottom: 0.5em;
-    }
-
-    .config {
+      font-size: 1.5em;
+      margin-bottom: 1em;
       text-align: center;
-      margin-top: 1em;
-      color: #ccc;
-    }
-
-    .config input {
-      width: 4em;
-      font-size: 1em;
-      text-align: center;
-      margin: 0 0.5em;
-    }
-
-    .config label {
-      margin-right: 1em;
+      color: #00c6ff;
     }
   </style>
 </head>
 <body>
 
   <h1>CanSat Telemetry Dashboard</h1>
-  <div style="text-align:center;">
-    <button onclick="showInstructions()">Instructions</button>
-    <button onclick="connectSerial()">Connect to CanSat</button>
-    <button onclick="downloadExcel()">Export Data</button>
-  </div>
 
-  <div class="config">
-    <label>Latitude Prefix: <input type="number" id="latPrefix" value="-37"></label>
-    <label>Longitude Prefix: <input type="number" id="lonPrefix" value="175"></label>
-  </div>
+  <div id="main-layout">
+    <div id="left-panel" class="panel">
+      <div>
+        <button onclick="connectSerial()">Connect to CanSat</button>
 
-  <div id="container">
-    <div id="left">
+        <div class="config">
+          <label for="latPrefix">Latitude Prefix</label>
+          <input type="number" id="latPrefix" value="-37">
+
+          <label for="lonPrefix">Longitude Prefix</label>
+          <input type="number" id="lonPrefix" value="175">
+        </div>
+      </div>
+
+      <div>
+        <button onclick="downloadExcel()">Export Data</button>
+        <button onclick="showInstructions()">Instructions</button>
+      </div>
+    </div>
+
+    <div id="middle-panel" class="panel">
+      <h2>Telemetry Table</h2>
       <table>
         <thead>
           <tr>
@@ -145,116 +186,111 @@
       </table>
     </div>
 
-    <div id="right">
+    <div id="right-panel" class="panel">
       <h2>Parsed Data Stream</h2>
       <div id="stream">[ Waiting for connection... ]</div>
     </div>
   </div>
 
- <!-- everything up to <script> remains unchanged -->
+  <script>
+    let port, reader;
+    let startTime = null;
+    let buffer = "";
+    const parsedDataLog = [];
 
-<script>
-  let port, reader;
-  let startTime = null;
-  let buffer = "";
-  const parsedDataLog = [];
+    async function connectSerial() {
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
 
-  async function connectSerial() {
-    try {
-      port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 9600 });
+        const decoder = new TextDecoderStream();
+        port.readable.pipeTo(decoder.writable);
+        reader = decoder.readable.getReader();
 
-      const decoder = new TextDecoderStream();
-      port.readable.pipeTo(decoder.writable);
-      reader = decoder.readable.getReader();
-
-      readLoop();
-    } catch (err) {
-      alert("Serial connection failed: " + err);
+        readLoop();
+      } catch (err) {
+        alert("Serial connection failed: " + err);
+      }
     }
-  }
 
-  async function readLoop() {
-    const telemetry = document.getElementById("telemetry");
-    const streamBox = document.getElementById("stream");
+    async function readLoop() {
+      const telemetry = document.getElementById("telemetry");
+      const streamBox = document.getElementById("stream");
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
 
-      buffer += value;
+        buffer += value;
 
-      let newlineIndex;
-      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
 
-        if (!startTime) startTime = performance.now();
-        const now = performance.now();
-        const elapsed = ((now - startTime) / 1000).toFixed(1);
-        const timestamp = new Date().toLocaleTimeString();
+          if (!startTime) startTime = performance.now();
+          const now = performance.now();
+          const elapsed = ((now - startTime) / 1000).toFixed(1);
+          const timestamp = new Date().toLocaleTimeString();
 
-        const match = line.match(/^(-?\d+)([SAFX])(\d{6})([A-PQ])(\d{6})$/);
-        if (match) {
-          const [, altitude, status, latDec, voltageGrade, lonDec] = match;
+          const match = line.match(/^(-?\d+)([SAFX])(\d{6})([A-PQ])(\d{6})$/);
+          if (match) {
+            const [, altitude, status, latDec, voltageGrade, lonDec] = match;
 
-          const latPrefix = document.getElementById("latPrefix").value || "-37";
-          const lonPrefix = document.getElementById("lonPrefix").value || "175";
-          const fullLat = `${latPrefix}.${latDec}`;
-          const fullLon = `${lonPrefix}.${lonDec}`;
+            const latPrefix = document.getElementById("latPrefix").value || "-37";
+            const lonPrefix = document.getElementById("lonPrefix").value || "175";
+            const fullLat = `${latPrefix}.${latDec}`;
+            const fullLon = `${lonPrefix}.${lonDec}`;
 
-          const missionStatusLabels = {
-            S: "Safe", A: "Armed", F: "Fired"
-          };
+            const missionStatusLabels = { S: "Safe", A: "Armed", F: "Fired" };
+            const sdCardStatus = status === "X" ? "FAIL" : "OK";
+            const missionStatus = missionStatusLabels[status] || "Unknown";
 
-          const sdCardStatus = status === "X" ? "FAIL" : "OK";
-          const missionStatus = missionStatusLabels[status] || "Unknown";
+            let voltageValue = "<2.5 V";
+            const code = voltageGrade.charCodeAt(0);
+            if (code >= 65 && code <= 80) {
+              voltageValue = (4.2 - (code - 65) * 0.1).toFixed(1) + " V";
+            }
 
-          let voltageValue = "<2.5 V";
-          const code = voltageGrade.charCodeAt(0);
-          if (code >= 65 && code <= 80) {
-            voltageValue = (4.2 - (code - 65) * 0.1).toFixed(1) + " V";
+            telemetry.innerHTML = `
+              <tr><td>Altitude (m)</td><td>${altitude}</td><td>${altitude}</td></tr>
+              <tr><td>SD Card Status</td><td>${status}</td><td>${sdCardStatus}</td></tr>
+              <tr><td>Mission Status</td><td>${status}</td><td>${missionStatus}</td></tr>
+              <tr><td>Latitude</td><td>${latDec}</td><td>${fullLat}</td></tr>
+              <tr><td>Longitude</td><td>${lonDec}</td><td>${fullLon}</td></tr>
+              <tr><td>Voltage Code</td><td>${voltageGrade}</td><td>${voltageValue}</td></tr>`;
+
+            parsedDataLog.push({
+              Time: timestamp,
+              Altitude: altitude,
+              SD_Status: sdCardStatus,
+              Mission_Status: missionStatus,
+              Latitude: fullLat,
+              Longitude: fullLon,
+              Voltage: voltageValue
+            });
+
+            streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line}\n` + streamBox.innerHTML;
+            streamBox.scrollTop = 0;
           }
-
-          telemetry.innerHTML = `
-            <tr><td>Altitude (m)</td><td>${altitude}</td><td>${altitude}</td></tr>
-            <tr><td>SD Card Status</td><td>${status}</td><td>${sdCardStatus}</td></tr>
-            <tr><td>Mission Status</td><td>${status}</td><td>${missionStatus}</td></tr>
-            <tr><td>Latitude</td><td>${latDec}</td><td>${fullLat}</td></tr>
-            <tr><td>Longitude</td><td>${lonDec}</td><td>${fullLon}</td></tr>
-            <tr><td>Voltage Code</td><td>${voltageGrade}</td><td>${voltageValue}</td></tr>`;
-
-          parsedDataLog.push({
-            Time: timestamp,
-            Altitude: altitude,
-            SD_Status: sdCardStatus,
-            Mission_Status: missionStatus,
-            Latitude: fullLat,
-            Longitude: fullLon,
-            Voltage: voltageValue
-          });
-
-          streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line}\n` + streamBox.innerHTML;
-          streamBox.scrollTop = 0;
         }
       }
     }
-  }
 
-  function downloadExcel() {
-    if (parsedDataLog.length === 0) {
-      alert("No data to export yet.");
-      return;
+    function downloadExcel() {
+      if (parsedDataLog.length === 0) {
+        alert("No data to export yet.");
+        return;
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(parsedDataLog);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Parsed Telemetry");
+      XLSX.writeFile(workbook, "parsed_telemetry_data.xlsx");
     }
 
-    const worksheet = XLSX.utils.json_to_sheet(parsedDataLog);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Parsed Telemetry");
-    XLSX.writeFile(workbook, "parsed_telemetry_data.xlsx");
-  }
-
-function showInstructions() {
-  alert(`INSTRUCTIONS:
+    function showInstructions() {
+      alert(`INSTRUCTIONS:
 
 1. Click "Connect to CanSat" to start the serial connection.
 2. Incoming serial format: <Altitude><Status><LatDec><VoltageCode><LonDec>
@@ -271,20 +307,11 @@ Field breakdown:
 - Voltage Code:
     - 'A' = 4.2V
     - 'B' = 4.1V
-    - ...
+    ...
     - 'P' = 2.5V
-    - 'Q' = <2.5V
-
-3. The dashboard will interpret:
-   - SD Card Status: 'OK' if not 'X', otherwise 'FAIL'
-   - Mission Status: derived from 'S', 'A', or 'F'
-   - Voltage Code: converted to actual voltage
-   - Coordinates: built from user-defined prefixes and decimal parts
-
-4. You can change the Latitude and Longitude prefix at the top of the page.`);
-}
-
-</script>
+    - 'Q' = <2.5V`);
+    }
+  </script>
 
 </body>
 </html>
