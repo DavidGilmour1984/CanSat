@@ -1,0 +1,90 @@
+#include <Servo.h>
+#include <Adafruit_NeoPixel.h>
+
+#define SERVO_PIN 15
+#define NEOPIXEL_PIN 16
+#define NEOPIXEL_COUNT 1
+
+Servo myServo;
+Adafruit_NeoPixel pixel(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+unsigned long startTime = 0;
+bool servoMoved = false;
+
+void setup() {
+  Serial.begin(9600);
+
+  myServo.attach(SERVO_PIN);
+  myServo.write(0);
+
+  pixel.begin();
+  pixel.setBrightness(50);
+  pixel.show();
+
+  startTime = millis();
+}
+
+void loop() {
+  unsigned long now = millis();
+  unsigned long elapsed = now - startTime;
+
+  // Clamp the progress between 0 and 1
+  float progress = min(1.0, elapsed / 60000.0); // 0.0 to 1.0
+
+  // Color gradient: Indigo → Blue → Cyan → Green → Yellow → Orange → Red
+  uint32_t color = getRainbowColor(progress);
+  pixel.setPixelColor(0, color);
+  pixel.show();
+
+  if (!servoMoved && elapsed >= 60000) {
+    myServo.write(90);
+    servoMoved = true;
+    Serial.println("60 seconds elapsed. Servo moved.");
+  }
+
+  delay(50);
+}
+
+// Linearly interpolate between two values
+int lerp(int a, int b, float t) {
+  return a + (b - a) * t;
+}
+
+// Maps progress [0.0–1.0] to color from Indigo to Red
+uint32_t getRainbowColor(float t) {
+  uint8_t r, g, b;
+
+  if (t < 0.17) { // Indigo → Blue
+    float p = t / 0.17;
+    r = lerp(75, 0, p);
+    g = lerp(0, 0, p);
+    b = lerp(130, 255, p);
+  } else if (t < 0.34) { // Blue → Cyan
+    float p = (t - 0.17) / 0.17;
+    r = lerp(0, 0, p);
+    g = lerp(0, 255, p);
+    b = lerp(255, 255, p);
+  } else if (t < 0.5) { // Cyan → Green
+    float p = (t - 0.34) / 0.16;
+    r = lerp(0, 0, p);
+    g = lerp(255, 255, p);
+    b = lerp(255, 0, p);
+  } else if (t < 0.67) { // Green → Yellow
+    float p = (t - 0.5) / 0.17;
+    r = lerp(0, 255, p);
+    g = lerp(255, 255, p);
+    b = lerp(0, 0, p);
+  } else if (t < 0.84) { // Yellow → Orange
+    float p = (t - 0.67) / 0.17;
+    r = lerp(255, 255, p);
+    g = lerp(255, 100, p);
+    b = lerp(0, 0, p);
+  } else { // Orange → Red
+    float p = (t - 0.84) / 0.16;
+    r = lerp(255, 255, p);
+    g = lerp(100, 0, p);
+    b = lerp(0, 0, p);
+  }
+
+  return pixel.Color(r, g, b);
+}
