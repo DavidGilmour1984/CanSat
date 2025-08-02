@@ -1,0 +1,218 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <TinyGPS++.h>
+#include <SD.h>
+#include <SPI.h>
+
+#define rxGPS 16
+#define txGPS 17
+#define PIN_SPI_CS 5
+#define VOLTAGE_PIN 36
+#define BUZZER_PIN 27
+#define SERVO_PIN 4
+
+#define SERVO_PWM_CHANNEL 0
+#define SERVO_FREQ 50
+#define SERVO_RES 16
+
+Adafruit_BMP280 bmp;
+Adafruit_MPU6050 mpu;
+HardwareSerial GPSSerial(1);
+TinyGPSPlus gps;
+File myFile;
+String filename;
+
+float baseAltitude = 0;
+float maxBMPAltitude = -10000.0;
+unsigned long startTime;
+unsigned long lastSDWrite = 0;
+unsigned long lastSerialPrint = 0;
+bool deploymentTriggered = false;
+bool hasPassed300m = false;
+
+float lastValidLatitude = 0.0;
+float lastValidLongitude = 0.0;
+float lastValidGPSAltitude = NAN;
+bool gpsDataAvailable = false;
+bool lastWriteSuccessful = true;
+
+unsigned int transmissionCount = 1;
+
+// Base91 encoding: encode an integer into `length` characters
+String base91Encode(unsigned long value, int length) {
+  String result = "";
+  for (int i = 0; i < length; i++) {
+    result = (char)(33 + value % 91) + result;
+    value /= 91;
+  }
+  while (result.length() < length) result = "!" + result;
+  return result;
+}
+
+// Combine SD status, voltage, and mission status into a single Base91 char
+char encodeSystemStatus(bool sdOK, float voltage, const String& missionStatus) {
+  int sdBit = sdOK ? 0 : 1;
+  int voltageIndex = round((4.2 - voltage) * 10);
+  if (voltageIndex < 0) voltageIndex = 0;
+  if (voltageIndex > 11) voltageIndex = 11;
+  int missionBit = 0;
+  if (missionStatus == "Armed") missionBit = 1;
+  else if (missionStatus == "Fired") missionBit = 2;
+  int combined = sdBit * 36 + voltageIndex * 3 + missionBit;
+  return (char)(33 + combined);  // Return printable Base91 character
+}
+
+// Compute a checksum over the string by summing ASCII values and mod 91
+char calculateChecksum(const String& data) {
+  int sum = 0;
+  for (int i = 0; i < data.length(); i++) {
+    sum += data[i];
+  }
+  return (char)(33 + (sum % 91));
+}
+
+// Servo PWM setup
+int angleToDuty(int angle) {
+  int dutyMin = 3277;
+  int dutyMax = 6553;
+  return map(angle, 0, 180, dutyMin, dutyMax);
+}
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) delay(100);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+  ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(0)); // Initialize servo
+
+  // Initialize BMP280 for pressure/altitude
+  if (!bmp.begin(0x76)) {
+    Serial.println("BMP280 not found!");
+    while (1);
+  }
+  baseAltitude = bmp.readAltitude(1013.25); // Set baseline
+
+  // Start GPS UART
+  GPSSerial.begin(9600, SERIAL_8N1, rxGPS, txGPS);
+
+  // Initialize MPU6050 accelerometer
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+
+  // Initialize SD card
+  if (!SD.begin(PIN_SPI_CS)) {
+    Serial.println("SD Card init failed!");
+  } else {
+    int fileIndex = 1;
+    do {
+      filename = "/data_" + String(fileIndex) + ".csv";
+      fileIndex++;
+    } while (SD.exists(filename));
+    myFile = SD.open(filename, FILE_WRITE);
+    if (myFile) {
+      myFile.println("Time (s), AccZ (m/s²), Alt (m), MaxAlt (m), GPS Alt, Lat, Lon, Voltage, Status");
+      myFile.close();
+    }
+  }
+
+  startTime = millis();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  float elapsed = (currentMillis - startTime) / 1000.0;
+
+  // Read GPS data if available
+  while (GPSSerial.available()) gps.encode(GPSSerial.read());
+  if (gps.location.isValid()) {
+    lastValidLatitude = gps.location.lat();
+    lastValidLongitude = gps.location.lng();
+    if (gps.altitude.isValid()) lastValidGPSAltitude = gps.altitude.meters();
+    gpsDataAvailable = true;
+  }
+
+  // Calculate altitude difference
+  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
+  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
+
+  // Read accelerometer Z-axis
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  float accelerationZ = a.acceleration.z;
+
+  // Read battery voltage
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.44;
+
+  // Determine mission status
+  String status = "Armed";
+  if (elapsed < 60) status = "Safe";
+  else if (!deploymentTriggered) {
+    if (bmpAltitude >= 300) hasPassed300m = true;
+    if (hasPassed300m && bmpAltitude <= 150) {
+      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90)); // Deploy servo
+      digitalWrite(BUZZER_PIN, HIGH); // Fire buzzer
+      deploymentTriggered = true;
+      status = "Fired";
+    }
+  } else {
+    status = "Fired";
+  }
+
+  // Log to SD every 100ms
+  if (currentMillis - lastSDWrite >= 100) {
+    lastSDWrite = currentMillis;
+    String csv = String(elapsed, 1) + ", " + String(accelerationZ, 1) + ", " +
+                 String(bmpAltitude, 1) + ", " + String(maxBMPAltitude, 1) + ", " +
+                 (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude)) + ", " +
+                 (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0,0") + ", " +
+                 String(voltage, 1) + ", " + status;
+
+    myFile = SD.open(filename, FILE_APPEND);
+    if (myFile) {
+      myFile.println(csv + ", OK");
+      myFile.close();
+      lastWriteSuccessful = true;
+    } else {
+      lastWriteSuccessful = false;
+    }
+  }
+
+  // Print telemetry over Serial every 2 seconds
+  if (currentMillis - lastSerialPrint >= 2000) {
+    lastSerialPrint = currentMillis;
+
+    // Encode each telemetry field
+    String txID = base91Encode(transmissionCount++, 2); // Transmission counter
+    int intAlt = round(bmpAltitude);
+    if (intAlt < 0) intAlt = 0;
+    if (intAlt > 8280) intAlt = 8280;
+    String altEnc = base91Encode(intAlt, 2);             // Altitude (max 8280)
+    char statusChar = encodeSystemStatus(lastWriteSuccessful, voltage, status); // 1 character
+
+    int latInt = (int)(fabs(lastValidLatitude) * 1000000.0);
+    int lonInt = (int)(fabs(lastValidLongitude) * 1000000.0);
+    latInt = latInt % 1000000;
+    lonInt = lonInt % 1000000;
+    String latEnc = base91Encode(latInt, 4);             // Latitude (6 dp)
+    String lonEnc = base91Encode(lonInt, 4);             // Longitude (6 dp)
+
+    // Combine all fields
+    String telemetry = txID + altEnc + statusChar + latEnc + lonEnc;
+
+    // Add checksum
+    char checksum = calculateChecksum(telemetry);
+    telemetry += checksum;
+
+    // Send over Serial
+    Serial.println(telemetry);
+  }
+}
