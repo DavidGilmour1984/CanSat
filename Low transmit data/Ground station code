@@ -1,317 +1,164 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>CanSat Telemetry Dashboard</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <style>
-    * {
-      box-sizing: border-box;
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <TinyGPS++.h>
+#include <SD.h>
+#include <SPI.h>
+
+#define rxGPS 16
+#define txGPS 17
+#define PIN_SPI_CS 5
+#define VOLTAGE_PIN 36
+#define BUZZER_PIN 27
+#define SERVO_PIN 4
+
+#define SERVO_PWM_CHANNEL 0
+#define SERVO_FREQ 50
+#define SERVO_RES 16
+
+Adafruit_BMP280 bmp;
+Adafruit_MPU6050 mpu;
+HardwareSerial GPSSerial(1);
+TinyGPSPlus gps;
+File myFile;
+String filename;
+
+float baseAltitude = 0;
+float maxBMPAltitude = -10000.0;
+unsigned long startTime;
+unsigned long lastSDWrite = 0;
+unsigned long lastSerialPrint = 0;
+bool deploymentTriggered = false;
+bool hasPassed300m = false;
+
+float lastValidLatitude = 0.0;
+float lastValidLongitude = 0.0;
+float lastValidGPSAltitude = NAN;
+bool gpsDataAvailable = false;
+bool lastWriteSuccessful = true;
+
+char voltageToGrade(float v) {
+  int index = round((4.2 - v) * 10);
+  if (index < 0) index = 0;
+  if (index > 15) return 'Q';
+  return 'A' + index;
+}
+
+int angleToDuty(int angle) {
+  int dutyMin = 3277;
+  int dutyMax = 6553;
+  return map(angle, 0, 180, dutyMin, dutyMax);
+}
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) delay(100);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+  ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(0));
+
+  if (!bmp.begin(0x76)) {
+    Serial.println("BMP280 not found!");
+    while (1);
+  }
+  baseAltitude = bmp.readAltitude(1013.25);
+
+  GPSSerial.begin(9600, SERIAL_8N1, rxGPS, txGPS);
+
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+
+  if (!SD.begin(PIN_SPI_CS)) {
+    Serial.println("SD Card init failed!");
+  } else {
+    int fileIndex = 1;
+    do {
+      filename = "/data_" + String(fileIndex) + ".csv";
+      fileIndex++;
+    } while (SD.exists(filename));
+    myFile = SD.open(filename, FILE_WRITE);
+    if (myFile) {
+      myFile.println("Time (s), AccZ (m/s²), Alt (m), MaxAlt (m), GPS Alt, Lat, Lon, Voltage, Status");
+      myFile.close();
     }
+  }
 
-    body {
-      font-family: 'Helvetica', sans-serif;
-      background: #080b10;
-      color: #ffffff;
-      margin: 0;
-      padding: 0;
+  startTime = millis();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  float elapsed = (currentMillis - startTime) / 1000.0;
+
+  while (GPSSerial.available()) gps.encode(GPSSerial.read());
+  if (gps.location.isValid()) {
+    lastValidLatitude = gps.location.lat();
+    lastValidLongitude = gps.location.lng();
+    if (gps.altitude.isValid()) lastValidGPSAltitude = gps.altitude.meters();
+    gpsDataAvailable = true;
+  }
+
+  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
+  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
+
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  float accelerationZ = a.acceleration.z;
+
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.5;
+
+  String status = "Armed";
+  if (elapsed < 60) status = "Safe";
+  else if (!deploymentTriggered) {
+    if (bmpAltitude >= 300) hasPassed300m = true;
+    if (hasPassed300m && bmpAltitude <= 150) {
+      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90));
+      digitalWrite(BUZZER_PIN, HIGH);
+      deploymentTriggered = true;
+      status = "Fired";
     }
+  } else {
+    status = "Fired";
+  }
 
-    h1 {
-      text-align: center;
-      font-size: 3em;
-      padding: 1em 0;
-      color: #00c6ff;
-      font-family: 'Orbitron', sans-serif;
+  if (currentMillis - lastSDWrite >= 100) {
+    lastSDWrite = currentMillis;
+    String csv = String(elapsed, 1) + ", " + String(accelerationZ, 1) + ", " +
+                 String(bmpAltitude, 1) + ", " + String(maxBMPAltitude, 1) + ", " +
+                 (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude)) + ", " +
+                 (gpsDataAvailable ? String(lastValidLatitude, 6) + ", " + String(lastValidLongitude, 6) : "0,0") + ", " +
+                 String(voltage, 1) + ", " + status;
+
+    myFile = SD.open(filename, FILE_APPEND);
+    if (myFile) {
+      myFile.println(csv + ", OK");
+      myFile.close();
+      lastWriteSuccessful = true;
+    } else {
+      lastWriteSuccessful = false;
     }
+  }
 
-    #main-layout {
-      display: flex;
-      flex-direction: row;
-      gap: 0;
-    }
+  if (currentMillis - lastSerialPrint >= 2000) {
+    lastSerialPrint = currentMillis;
 
-    .panel {
-      padding: 1em;
-    }
+    char statusChar = (!lastWriteSuccessful ? 'X' : (status == "Safe" ? 'S' : (status == "Fired" ? 'F' : 'A')));
+    char voltageChar = voltageToGrade(voltage);
 
-    #left-panel {
-      width: 30%;
-      background: #11131a;
-      border-right: 2px solid #0d1928;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
+    String latStr = String(fabs(lastValidLatitude), 6);
+    String lonStr = String(fabs(lastValidLongitude), 6);
+    String latDec = latStr.substring(latStr.indexOf('.') + 1);
+    String lonDec = lonStr.substring(lonStr.indexOf('.') + 1);
 
-    #middle-panel {
-      width: 30%;
-      background: #151920;
-      border-right: 2px solid #0d1928;
-    }
-
-    #right-panel {
-      width: 40%;
-      background: #0e1117;
-    }
-
-    button {
-      display: block;
-      width: 90%;
-      margin: 1em auto;
-      padding: 1em;
-      font-size: 1.2em;
-      background: linear-gradient(to right, #00c6ff, #0072ff);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      box-shadow: 0 0 6px #00c6ff66;
-    }
-
-    button:hover {
-      background: linear-gradient(to right, #0072ff, #00c6ff);
-      transform: scale(1.02);
-      box-shadow: 0 0 10px #00c6ffbb;
-    }
-
-    .config {
-      text-align: center;
-      margin-top: 2em;
-    }
-
-    .config label {
-      display: block;
-      margin: 1.5em auto 0.5em;
-      width: 90%;
-      font-size: 1.1em;
-      color: #ffffff;
-    }
-
-    .config input {
-      width: 100%;
-      font-size: 1.1em;
-      padding: 0.8em;
-      text-align: center;
-      border-radius: 8px;
-      border: none;
-      background: #1a1e25;
-      color: #ffffff;
-      box-shadow: inset 0 0 2px #00c6ff66;
-      outline: none;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 1em;
-      font-size: 1em;
-    }
-
-    th, td {
-      border: 1px solid #333;
-      padding: 10px;
-      text-align: center;
-    }
-
-    th {
-      background-color: #0e1823;
-      color: #00c6ff;
-    }
-
-    td {
-      background-color: #1d212c;
-      color: #ffffff;
-    }
-
-    #stream {
-      font-family: monospace;
-      font-size: 0.9em;
-      height: 70vh;
-      padding: 1em;
-      white-space: pre-line;
-      overflow-y: auto;
-      border-left: 2px solid #0d1928;
-      color: #00ffcc;
-      background: #0a0c10;
-    }
-
-    h2 {
-      font-family: 'Orbitron', sans-serif;
-      font-size: 1.5em;
-      margin-bottom: 1em;
-      text-align: center;
-      color: #00c6ff;
-    }
-  </style>
-</head>
-<body>
-
-  <h1>CanSat Telemetry Dashboard</h1>
-
-  <div id="main-layout">
-    <div id="left-panel" class="panel">
-      <div>
-        <button onclick="connectSerial()">Connect to CanSat</button>
-
-        <div class="config">
-          <label for="latPrefix">Latitude Prefix</label>
-          <input type="number" id="latPrefix" value="-37">
-
-          <label for="lonPrefix">Longitude Prefix</label>
-          <input type="number" id="lonPrefix" value="175">
-        </div>
-      </div>
-
-      <div>
-        <button onclick="downloadExcel()">Export Data</button>
-        <button onclick="showInstructions()">Instructions</button>
-      </div>
-    </div>
-
-    <div id="middle-panel" class="panel">
-      <h2>Telemetry Table</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Parameter</th>
-            <th>Raw Value</th>
-            <th>Interpreted</th>
-          </tr>
-        </thead>
-        <tbody id="telemetry">
-          <tr><td colspan="3">Waiting for data...</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div id="right-panel" class="panel">
-      <h2>Parsed Data Stream</h2>
-      <div id="stream">[ Waiting for connection... ]</div>
-    </div>
-  </div>
-
-  <script>
-    let port, reader;
-    let startTime = null;
-    let buffer = "";
-    const parsedDataLog = [];
-
-    async function connectSerial() {
-      try {
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 9600 });
-
-        const decoder = new TextDecoderStream();
-        port.readable.pipeTo(decoder.writable);
-        reader = decoder.readable.getReader();
-
-        readLoop();
-      } catch (err) {
-        alert("Serial connection failed: " + err);
-      }
-    }
-
-    async function readLoop() {
-      const telemetry = document.getElementById("telemetry");
-      const streamBox = document.getElementById("stream");
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += value;
-
-        let newlineIndex;
-        while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-
-          if (!startTime) startTime = performance.now();
-          const now = performance.now();
-          const elapsed = ((now - startTime) / 1000).toFixed(1);
-          const timestamp = new Date().toLocaleTimeString();
-
-          const match = line.match(/^(-?\d+)([SAFX])(\d{6})([A-PQ])(\d{6})$/);
-          if (match) {
-            const [, altitude, status, latDec, voltageGrade, lonDec] = match;
-
-            const latPrefix = document.getElementById("latPrefix").value || "-37";
-            const lonPrefix = document.getElementById("lonPrefix").value || "175";
-            const fullLat = `${latPrefix}.${latDec}`;
-            const fullLon = `${lonPrefix}.${lonDec}`;
-
-            const missionStatusLabels = { S: "Safe", A: "Armed", F: "Fired" };
-            const sdCardStatus = status === "X" ? "FAIL" : "OK";
-            const missionStatus = missionStatusLabels[status] || "Unknown";
-
-            let voltageValue = "<2.5 V";
-            const code = voltageGrade.charCodeAt(0);
-            if (code >= 65 && code <= 80) {
-              voltageValue = (4.2 - (code - 65) * 0.1).toFixed(1) + " V";
-            }
-
-            telemetry.innerHTML = `
-              <tr><td>Altitude (m)</td><td>${altitude}</td><td>${altitude}</td></tr>
-              <tr><td>SD Card Status</td><td>${status}</td><td>${sdCardStatus}</td></tr>
-              <tr><td>Mission Status</td><td>${status}</td><td>${missionStatus}</td></tr>
-              <tr><td>Latitude</td><td>${latDec}</td><td>${fullLat}</td></tr>
-              <tr><td>Longitude</td><td>${lonDec}</td><td>${fullLon}</td></tr>
-              <tr><td>Voltage Code</td><td>${voltageGrade}</td><td>${voltageValue}</td></tr>`;
-
-            parsedDataLog.push({
-              Time: timestamp,
-              Altitude: altitude,
-              SD_Status: sdCardStatus,
-              Mission_Status: missionStatus,
-              Latitude: fullLat,
-              Longitude: fullLon,
-              Voltage: voltageValue
-            });
-
-            streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line}\n` + streamBox.innerHTML;
-            streamBox.scrollTop = 0;
-          }
-        }
-      }
-    }
-
-    function downloadExcel() {
-      if (parsedDataLog.length === 0) {
-        alert("No data to export yet.");
-        return;
-      }
-
-      const worksheet = XLSX.utils.json_to_sheet(parsedDataLog);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Parsed Telemetry");
-      XLSX.writeFile(workbook, "parsed_telemetry_data.xlsx");
-    }
-
-    function showInstructions() {
-      alert(`INSTRUCTIONS:
-
-1. Click "Connect to CanSat" to start the serial connection.
-2. Incoming serial format: <Altitude><Status><LatDec><VoltageCode><LonDec>
-   Example: 328A802044B369736
-
-Field breakdown:
-- Altitude: Integer in meters (e.g., 328)
-- Status:
-    - 'S' = Safe (under 60s)
-    - 'A' = Armed (above 300m)
-    - 'F' = Fired (below 150m after arming)
-    - 'X' = SD card write failure
-- LatDec / LonDec: Six-digit decimal parts of latitude and longitude
-- Voltage Code:
-    - 'A' = 4.2V
-    - 'B' = 4.1V
-    ...
-    - 'P' = 2.5V
-    - 'Q' = <2.5V`);
-    }
-  </script>
-
-</body>
-</html>
+    String telemetry = String((int)round(bmpAltitude)) + statusChar + latDec + voltageChar + lonDec;
+    Serial.println(telemetry);
+  }
+}
