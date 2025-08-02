@@ -36,6 +36,7 @@ float lastValidLatitude = 0.0;
 float lastValidLongitude = 0.0;
 float lastValidGPSAltitude = NAN;
 bool gpsDataAvailable = false;
+bool lastWriteSuccessful = true;
 
 char voltageToGrade(float v) {
   int index = round((4.2 - v) * 10);
@@ -112,7 +113,7 @@ void loop() {
   mpu.getEvent(&a, &g, &temp);
   float accelerationZ = a.acceleration.z;
 
-  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.38;
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3 / 4095.0) * 1.44;
 
   String status = "Armed";
   if (elapsed < 60) status = "Safe";
@@ -121,8 +122,6 @@ void loop() {
     if (hasPassed300m && bmpAltitude <= 150) {
       ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90));
       digitalWrite(BUZZER_PIN, HIGH);
-      delay(500);
-      digitalWrite(BUZZER_PIN, LOW);
       deploymentTriggered = true;
       status = "Fired";
     }
@@ -142,12 +141,16 @@ void loop() {
     if (myFile) {
       myFile.println(csv + ", OK");
       myFile.close();
+      lastWriteSuccessful = true;
+    } else {
+      lastWriteSuccessful = false;
     }
   }
 
   if (currentMillis - lastSerialPrint >= 2000) {
     lastSerialPrint = currentMillis;
-    char statusChar = (status == "Safe" ? 'S' : (status == "Fired" ? 'F' : 'A'));
+
+    char statusChar = (!lastWriteSuccessful ? 'X' : (status == "Safe" ? 'S' : (status == "Fired" ? 'F' : 'A')));
     char voltageChar = voltageToGrade(voltage);
 
     String latStr = String(fabs(lastValidLatitude), 6);
