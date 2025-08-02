@@ -28,7 +28,7 @@
       justify-content: center;
     }
 
-    #left, #right {
+    #left, #right, #csvbox {
       flex: 1 1 400px;
       background: #1e1f26;
       border-radius: 12px;
@@ -77,7 +77,7 @@
       font-weight: 600;
     }
 
-    #stream {
+    #stream, #csvStream {
       background: #0d0d0d;
       color: #33ff99;
       font-family: monospace;
@@ -149,6 +149,11 @@
       <h2>Parsed Data Stream</h2>
       <div id="stream">[ Waiting for connection... ]</div>
     </div>
+
+    <div id="csvbox">
+      <h2>CSV Stream</h2>
+      <div id="csvStream">[ Waiting for data... ]</div>
+    </div>
   </div>
 
 <script>
@@ -161,11 +166,9 @@ async function connectSerial() {
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 9600 });
-
     const decoder = new TextDecoderStream();
     port.readable.pipeTo(decoder.writable);
     reader = decoder.readable.getReader();
-
     readLoop();
   } catch (err) {
     alert("Serial connection failed: " + err);
@@ -193,11 +196,11 @@ function decodeSystemStatus(code) {
 async function readLoop() {
   const telemetry = document.getElementById("telemetry");
   const streamBox = document.getElementById("stream");
+  const csvBox = document.getElementById("csvStream");
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-
     buffer += value;
     let newlineIndex;
     while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
@@ -210,46 +213,58 @@ async function readLoop() {
       const timestamp = new Date().toLocaleTimeString();
 
       if (line.length === 14) {
-        const tx = decodeBase91(line.slice(0, 2));
-        const alt = decodeBase91(line.slice(2, 4));
-        const statusChar = line.charAt(4);
-        const lat = decodeBase91(line.slice(5, 9));
-        const lon = decodeBase91(line.slice(9, 13));
-        const checksum = line.charAt(13);
+        try {
+          const tx = decodeBase91(line.slice(0, 2));
+          const alt = decodeBase91(line.slice(2, 4));
+          const statusChar = line.charAt(4);
+          const lat = decodeBase91(line.slice(5, 9));
+          const lon = decodeBase91(line.slice(9, 13));
+          const checksum = line.charAt(13);
 
-        const calcChecksum = String.fromCharCode(33 + [...line.slice(0, 13)].reduce((a, c) => a + c.charCodeAt(0), 0) % 91);
-        const checksumValid = checksum === calcChecksum ? "✅" : "❌";
+          const calcChecksum = String.fromCharCode(33 + [...line.slice(0, 13)].reduce((a, c) => a + c.charCodeAt(0), 0) % 91);
+          const checksumValid = checksum === calcChecksum ? "✅" : "❌";
 
-        const { sd, voltage, mission } = decodeSystemStatus(statusChar);
-        const latPrefix = document.getElementById("latPrefix").value || "-37";
-        const lonPrefix = document.getElementById("lonPrefix").value || "175";
-        const fullLat = `${latPrefix}.${lat.toString().padStart(6, "0")}`;
-        const fullLon = `${lonPrefix}.${lon.toString().padStart(6, "0")}`;
+          const { sd, voltage, mission } = decodeSystemStatus(statusChar);
+          const latPrefix = document.getElementById("latPrefix").value || "-37";
+          const lonPrefix = document.getElementById("lonPrefix").value || "175";
+          const fullLat = `${latPrefix}.${lat.toString().padStart(6, "0")}`;
+          const fullLon = `${lonPrefix}.${lon.toString().padStart(6, "0")}`;
 
-        telemetry.innerHTML = `
-          <tr><td>Transmission ID</td><td>${line.slice(0,2)}</td><td>${tx}</td></tr>
-          <tr><td>Altitude (m)</td><td>${line.slice(2,4)}</td><td>${alt}</td></tr>
-          <tr><td>Status</td><td>${statusChar}</td><td>${mission}</td></tr>
-          <tr><td>SD Card</td><td>${statusChar}</td><td>${sd}</td></tr>
-          <tr><td>Voltage</td><td>${statusChar}</td><td>${voltage}</td></tr>
-          <tr><td>Latitude</td><td>${line.slice(5,9)}</td><td>${fullLat}</td></tr>
-          <tr><td>Longitude</td><td>${line.slice(9,13)}</td><td>${fullLon}</td></tr>
-          <tr><td>Checksum</td><td>${checksum}</td><td>${checksumValid}</td></tr>
-        `;
+          telemetry.innerHTML = `
+            <tr><td>Transmission ID</td><td>${line.slice(0,2)}</td><td>${tx}</td></tr>
+            <tr><td>Altitude (m)</td><td>${line.slice(2,4)}</td><td>${alt}</td></tr>
+            <tr><td>Status</td><td>${statusChar}</td><td>${mission}</td></tr>
+            <tr><td>SD Card</td><td>${statusChar}</td><td>${sd}</td></tr>
+            <tr><td>Voltage</td><td>${statusChar}</td><td>${voltage}</td></tr>
+            <tr><td>Latitude</td><td>${line.slice(5,9)}</td><td>${fullLat}</td></tr>
+            <tr><td>Longitude</td><td>${line.slice(9,13)}</td><td>${fullLon}</td></tr>
+            <tr><td>Checksum</td><td>${checksum}</td><td>${checksumValid}</td></tr>
+          `;
 
-        parsedDataLog.push({
-          Time: timestamp,
-          TX_ID: tx,
-          Altitude: alt,
-          Status: mission,
-          SD_Card: sd,
-          Voltage: voltage,
-          Latitude: fullLat,
-          Longitude: fullLon,
-          Checksum: checksumValid
-        });
+          parsedDataLog.push({
+            Time: timestamp,
+            TX_ID: tx,
+            Altitude: alt,
+            Status: mission,
+            SD_Card: sd,
+            Voltage: voltage,
+            Latitude: fullLat,
+            Longitude: fullLon,
+            Checksum: checksumValid
+          });
 
-        streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line} (${checksumValid})\n` + streamBox.innerHTML;
+          const csvLine = `${timestamp},${tx},${alt},${mission},${sd},${voltage},${fullLat},${fullLon},${checksumValid}`;
+          csvBox.innerHTML = csvLine + "\n" + csvBox.innerHTML;
+          csvBox.scrollTop = 0;
+          streamBox.innerHTML = `[${timestamp} | +${elapsed}s] ${line} (${checksumValid})\n` + streamBox.innerHTML;
+          streamBox.scrollTop = 0;
+
+        } catch (err) {
+          streamBox.innerHTML = `[${timestamp} | +${elapsed}s] [parse error] "${line}" (✖)\n` + streamBox.innerHTML;
+          streamBox.scrollTop = 0;
+        }
+      } else if (line.length > 0) {
+        streamBox.innerHTML = `[${timestamp} | +${elapsed}s] [invalid length] "${line}" (✖)\n` + streamBox.innerHTML;
         streamBox.scrollTop = 0;
       }
     }
