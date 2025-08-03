@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Ebyte Serial Terminal</title>
+  <style>
+    body { font-family: Helvetica, sans-serif; padding: 20px; background: #f5f5f5; }
+    textarea { width: 100%; height: 200px; font-family: monospace; margin-top: 10px; }
+    input[type="text"] { width: 80%; padding: 10px; }
+    button { padding: 10px 15px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h2>🛰️ Ebyte Serial Communicator</h2>
+
+  <button onclick="connectSerial()">Connect to Ebyte Module</button><br><br>
+
+  <label for="input">Send:</label>
+  <input type="text" id="input" placeholder="Type message..." />
+  <button onclick="sendMessage()">Send</button>
+
+  <textarea id="output" readonly placeholder="Received messages..."></textarea>
+
+  <script>
+    let port;
+    let writer;
+    let reader;
+
+    async function connectSerial() {
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+
+        writer = port.writable.getWriter();
+
+        // Read incoming data
+        const decoder = new TextDecoderStream();
+        port.readable.pipeTo(decoder.writable);
+        reader = decoder.readable.getReader();
+
+        readLoop();
+        document.getElementById("output").value += "✅ Connected to serial port.\n";
+      } catch (err) {
+        alert("Connection failed: " + err);
+      }
+    }
+
+    async function readLoop() {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          document.getElementById("output").value += value;
+        }
+      }
+    }
+
+    async function sendMessage() {
+      const text = document.getElementById("input").value + "\n";
+      const encoder = new TextEncoder();
+      await writer.write(encoder.encode(text));
+      document.getElementById("input").value = "";
+    }
+  </script>
+</body>
+</html>
