@@ -38,7 +38,7 @@
         reader = decoder.readable.getReader();
 
         readLoop();
-        document.getElementById("output").value += "✅ Connected to serial port.\n";
+        prependToOutput("✅ Connected to serial port.");
       } catch (err) {
         alert("Connection failed: " + err);
       }
@@ -49,16 +49,24 @@
         const { value, done } = await reader.read();
         if (done) break;
         if (value) {
-          document.getElementById("output").value += value;
+          prependToOutput(value.trim());
         }
       }
     }
 
     async function sendMessage() {
-      const text = document.getElementById("input").value + "\n";
+      const text = document.getElementById("input").value;
+      if (text.trim() === "") return;
+
       const encoder = new TextEncoder();
-      await writer.write(encoder.encode(text));
+      await writer.write(encoder.encode(text + "\n"));
+      prependToOutput("📤 " + text);
       document.getElementById("input").value = "";
+    }
+
+    function prependToOutput(message) {
+      const output = document.getElementById("output");
+      output.value = message + "\n" + output.value;
     }
   </script>
 </body>
