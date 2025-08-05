@@ -1,13 +1,26 @@
-HardwareSerial EbyteSerial(2); // Use UART2: TX=17, RX=16
+#include <HardwareSerial.h>
+
+#define EBYTE_RX 16
+#define EBYTE_TX 17
+
+HardwareSerial EbyteSerial(2);
+
+uint32_t counter = 1;
+unsigned long lastSendTime = 0;
 
 void setup() {
-  Serial.begin(115200);                   // For debug output
-  EbyteSerial.begin(9600, SERIAL_8N1, 16, 17); // Ebyte TX/RX
-  Serial.println("Transmitter ready.");
+  Serial.begin(115200);
+  EbyteSerial.begin(9600, SERIAL_8N1, EBYTE_RX, EBYTE_TX);
+  Serial.println("🚀 Transmitter started (1 message/sec)...");
 }
 
 void loop() {
-  EbyteSerial.println("Hello from transmitter!");
-  Serial.println("Sent: Hello from transmitter!");
-  delay(1000); // Send every 1 second
+  unsigned long now = millis();
+
+  if (now - lastSendTime >= 1000) {
+    lastSendTime = now;
+    String message = String(counter++);
+    EbyteSerial.println(message);
+    Serial.println("➡️ Sent: " + message);
+  }
 }
