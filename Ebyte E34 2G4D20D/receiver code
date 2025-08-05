@@ -1,14 +1,49 @@
-HardwareSerial EbyteSerial(2); // Use UART2: TX=17, RX=16
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <HardwareSerial.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+
+#define EBYTE_RX 16
+#define EBYTE_TX 17
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+HardwareSerial EbyteSerial(2);
 
 void setup() {
-  Serial.begin(115200);                   // For debug output
-  EbyteSerial.begin(9600, SERIAL_8N1, 16, 17); // Ebyte TX/RX
-  Serial.println("Receiver ready.");
+  Serial.begin(115200);
+  EbyteSerial.begin(9600, SERIAL_8N1, EBYTE_RX, EBYTE_TX);
+  Serial.println("📡 Receiver ready...");
+
+  // Initialize OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("❌ OLED not found");
+    while (true); // Stop here if OLED fails
+  }
+
+  display.clearDisplay();
+  display.setTextSize(2);           // Large readable font
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("Waiting...");
+  display.display();
 }
 
 void loop() {
-  while (EbyteSerial.available()) {
-    char c = EbyteSerial.read();
-    Serial.write(c); // Print received data to Serial Monitor
+  if (EbyteSerial.available()) {
+    String incoming = EbyteSerial.readStringUntil('\n');
+    Serial.println("⬅️ Received: " + incoming);
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.println("Recv:");
+    display.setTextSize(2);
+    display.setCursor(0, 30);
+    display.println(incoming);
+    display.display();
   }
 }
