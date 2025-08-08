@@ -60,7 +60,7 @@ void setup() {
 
   ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
   ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
-  ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(0));
+
 
   if (!bmp.begin(0x76)) {
     Serial.println("BMP280 not found!");
