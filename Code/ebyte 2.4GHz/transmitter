@@ -1,0 +1,169 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <TinyGPS++.h>
+#include <SD.h>
+#include <SPI.h>
+
+#define rxGPS 16
+#define txGPS 17
+#define PIN_SPI_CS 5
+#define VOLTAGE_PIN 36
+#define BUZZER_PIN 27
+#define SERVO_PIN 4
+
+#define SERVO_PWM_CHANNEL 0
+#define SERVO_FREQ 50
+#define SERVO_RES 16
+
+Adafruit_BMP280 bmp;
+Adafruit_MPU6050 mpu;
+HardwareSerial GPSSerial(1);
+TinyGPSPlus gps;
+File myFile;
+String filename;
+
+float baseAltitude = 0;
+float maxBMPAltitude = -10000.0;
+unsigned long startTime;
+unsigned long lastSDWrite = 0;
+
+bool deploymentTriggered = false;
+bool hasPassed300m = false;
+
+float lastValidLatitude = 0.0;
+float lastValidLongitude = 0.0;
+float lastValidGPSAltitude = NAN;
+bool gpsDataAvailable = false;
+
+unsigned long packetCount = 0;
+
+const char* CSV_HEADER =
+  "TimeSeconds,AccelerationZ_mps2,Altitude_m,MaxAltitude_m,GPSAltitude_m,Latitude_deg,Longitude_deg,Voltage_V,Status,PacketCount,Satellites";
+
+int angleToDuty(int angle) {
+  // 16-bit PWM (0..65535): ~1ms (5%) to ~2ms (10%) for typical servo
+  int dutyMin = 3277;
+  int dutyMax = 6553;
+  return map(angle, 0, 180, dutyMin, dutyMax);
+}
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) { delay(10); }
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+
+  if (!bmp.begin(0x76)) {
+    Serial.println("BMP280 not found!");
+    while (1) { delay(100); }
+  }
+  baseAltitude = bmp.readAltitude(1013.25);
+
+  GPSSerial.begin(9600, SERIAL_8N1, rxGPS, txGPS);
+
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1) { delay(100); }
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+
+  // SD init and header
+  if (!SD.begin(PIN_SPI_CS)) {
+    Serial.println("SD Card init failed!");
+  } else {
+    int fileIndex = 1;
+    do {
+      filename = "/data_" + String(fileIndex) + ".csv";
+      fileIndex++;
+    } while (SD.exists(filename));
+    myFile = SD.open(filename, FILE_WRITE);
+    if (myFile) {
+      myFile.println(CSV_HEADER);
+      myFile.close();
+    }
+  }
+
+  // Mirror header to Serial
+  Serial.println(CSV_HEADER);
+
+  startTime = millis();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  float elapsed = (currentMillis - startTime) / 1000.0f;
+
+  // GPS feed
+  while (GPSSerial.available()) gps.encode(GPSSerial.read());
+  if (gps.location.isValid()) {
+    lastValidLatitude  = gps.location.lat();
+    lastValidLongitude = gps.location.lng();
+    if (gps.altitude.isValid()) lastValidGPSAltitude = gps.altitude.meters();
+    gpsDataAvailable = true;
+  }
+
+  int satCount = gps.satellites.isValid() ? (int)gps.satellites.value() : 0;
+
+  // Sensors
+  float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
+  if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
+
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  float accelerationZ = a.acceleration.z; // m/s^2
+
+  // Voltage (adjust divider factor if needed)
+  float voltage = analogRead(VOLTAGE_PIN) * (3.3f / 4095.0f) * 1.44f;
+
+  // Deployment logic
+  String status = "Armed";
+  if (elapsed < 60.0f) {
+    status = "Safe";
+  } else if (!deploymentTriggered) {
+    if (bmpAltitude >= 300.0f) hasPassed300m = true;
+    if (hasPassed300m && bmpAltitude <= 150.0f) {
+      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90));
+      digitalWrite(BUZZER_PIN, HIGH);
+      deploymentTriggered = true;
+      status = "Fired";
+    }
+  } else {
+    status = "Fired";
+  }
+
+  // Log & transmit at 1 Hz
+  if (currentMillis - lastSDWrite >= 1000) {
+    lastSDWrite = currentMillis;
+    packetCount++; // increment per CSV packet
+
+    // Build single CSV row (no abbreviations)
+    String csv =
+      String(elapsed, 3) + "," +
+      String(accelerationZ, 3) + "," +
+      String(bmpAltitude, 3) + "," +
+      String(maxBMPAltitude, 3) + "," +
+      (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude, 3)) + "," +
+      (gpsDataAvailable ? String(lastValidLatitude, 6) : String("0")) + "," +
+      (gpsDataAvailable ? String(lastValidLongitude, 6) : String("0")) + "," +
+      String(voltage, 3) + "," +
+      status + "," +
+      String(packetCount) + "," +
+      String(satCount);
+
+    // Write to SD
+    myFile = SD.open(filename, FILE_APPEND);
+    if (myFile) {
+      myFile.println(csv);
+      myFile.close();
+    }
+
+    // Mirror exactly to standard Serial
+    Serial.println(csv);
+  }
+}
