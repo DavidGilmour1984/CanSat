@@ -1,0 +1,110 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define UART_PORT_NUM     1
+#define UART_BAUD         9600
+#define UART_RX_PIN       16   // RX on GPIO16 (requested)
+#define UART_TX_PIN       17   // TX not required, but must be assigned for begin()
+
+#define I2C_SDA_PIN       21   // explicit I2C pins
+#define I2C_SCL_PIN       22
+#define OLED_ADDR         0x3C
+#define SCREEN_WIDTH      128
+#define SCREEN_HEIGHT     64
+#define OLED_RESET        -1
+
+// Text rendering (6px wide x 8px high at textsize=1)
+#define CHAR_W            6
+#define CHAR_H            8
+#define MAX_COLS          (SCREEN_WIDTH / CHAR_W)   // 21 columns
+#define MAX_LINES         (SCREEN_HEIGHT / CHAR_H)  // 8 lines
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+HardwareSerial ExtSerial(UART_PORT_NUM);
+
+// simple line buffer + scrolling
+String lines[MAX_LINES];
+String currentLine;
+bool dirty = true; // need to refresh display
+
+void pushLine(const String& s) {
+  for (int i = 0; i < MAX_LINES - 1; i++) lines[i] = lines[i + 1];
+  lines[MAX_LINES - 1] = s;
+  dirty = true;
+}
+
+void drawScreen() {
+  if (!dirty) return;
+  display.clearDisplay();
+  display.setTextSize(1);              // small font
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  for (int i = 0; i < MAX_LINES - 1; i++) {
+    display.println(lines[i]);
+  }
+  // show the in-progress line on the last row
+  display.println(currentLine);
+  display.display();
+  dirty = false;
+}
+
+void addChar(char c) {
+  if (c == '\r') return; // ignore CR
+  if (c == '\n') {
+    pushLine(currentLine);
+    currentLine = "";
+    return;
+  }
+  currentLine += c;
+  // manual wrap
+  if ((int)currentLine.length() >= MAX_COLS) {
+    pushLine(currentLine);
+    currentLine = "";
+  }
+  dirty = true;
+}
+
+void setup() {
+  // USB serial for echo/monitor
+  Serial.begin(9600);
+
+  // External UART on RX=16, TX=17 (TX not used)
+  ExtSerial.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+
+  // I2C + OLED init
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    // If OLED fails, still keep serial echo working
+    Serial.println("SSD1306 init failed");
+  } else {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("UART RX on GPIO16");
+    display.println("Echo -> Serial");
+    display.println("OLED @ 0x3C");
+    display.display();
+    delay(700);
+    display.clearDisplay();
+    display.display();
+  }
+
+  // prime buffers
+  for (int i = 0; i < MAX_LINES; i++) lines[i] = "";
+  currentLine.reserve(MAX_COLS + 4);
+  dirty = true;
+}
+
+void loop() {
+  // read any incoming bytes from external UART
+  while (ExtSerial.available() > 0) {
+    char c = (char)ExtSerial.read();
+    Serial.write(c);      // echo to USB Serial
+    addChar(c);           // show on OLED
+  }
+
+  // periodic redraw if needed
+  drawScreen();
+}
