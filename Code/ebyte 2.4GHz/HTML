@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Serial → CSV → 2-Column Table + Live Map</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
+
+<style>
+  :root { --bg:#f5f5f7; --card:#fff; --text:#111; --muted:#666; --accent:#0b5; --danger:#d33; --border:#e5e5ea; }
+  html, body { height:100%; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:Helvetica, Arial, sans-serif; }
+  .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
+  .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+  .btn{ background:var(--text); color:#fff; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; }
+  .btn.outline{ background:#fff; color:var(--text); border:1px solid var(--border); }
+  .toolbar select{ padding:10px; border-radius:10px; border:1px solid var(--border); background:#fff; }
+  .status-dot{ width:10px; height:10px; border-radius:50%; background:var(--danger); display:inline-block; margin-left:6px; }
+  .status.online{ background:var(--accent); }
+  .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  .card{ background:var(--card); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.06); padding:16px; overflow:hidden; }
+  h2{ font-size:18px; margin:0 0 10px; }
+  #raw{ height:220px; background:#0a0a0a; color:#e5e5e5; font-family:ui-monospace, Menlo, Consolas, monospace; padding:12px; border-radius:12px; overflow:auto; white-space:pre-wrap; border:1px solid #222; }
+  table{ width:100%; border-collapse:collapse; font-size:14px; }
+  th, td{ padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; }
+  th{ color:var(--muted); font-weight:600; background:#fafafa; position:sticky; top:0; }
+  #map{ height:420px; border-radius:12px; }
+  .pill{ font-size:12px; color:#fff; background:var(--muted); padding:3px 8px; border-radius:999px; margin-left:6px; }
+  .ok{ background:var(--accent); }
+  .bad{ background:#c33; }
+  .muted{ color:var(--muted); }
+  .footer{ margin-top:8px; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar">
+    <button id="connectBtn" class="btn">Connect</button>
+    <button id="disconnectBtn" class="btn outline" disabled>Disconnect</button>
+    <label>Baud
+      <select id="baud">
+        <option>9600</option>
+        <option>19200</option>
+        <option>38400</option>
+        <option>57600</option>
+        <option selected>115200</option>
+        <option>230400</option>
+        <option>460800</option>
+      </select>
+    </label>
+    <button id="clearBtn" class="btn outline">Clear Log</button>
+    <span class="muted">Status <span id="dot" class="status-dot"></span></span>
+    <span id="lineCount" class="muted"></span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Raw Data <span id="streamState" class="pill">idle</span></h2>
+      <div id="raw"></div>
+    </div>
+
+    <div class="card">
+      <h2>Parsed (Key / Value)</h2>
+      <table id="kvTable">
+        <thead>
+          <tr><th>Variable</th><th>Value</th></tr>
+        </thead>
+        <tbody id="kvBody"></tbody>
+      </table>
+      <div class="footer">
+        Expects header or uses default order:<br>
+        <code>TimeSeconds, AccelerationZ_mps2, Altitude_m, MaxAltitude_m, GPSAltitude_m, Latitude_deg, Longitude_deg, Voltage_V, Status, PacketCount, Satellites</code>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column:1 / -1">
+      <h2>Live Map <span id="fixPill" class="pill">no fix</span></h2>
+      <div id="map"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // --- UI elements ---
+  const connectBtn = document.getElementById('connectBtn');
+  const disconnectBtn = document.getElementById('disconnectBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const baudSel = document.getElementById('baud');
+  const dot = document.getElementById('dot');
+  const rawDiv = document.getElementById('raw');
+  const streamState = document.getElementById('streamState');
+  const lineCountEl = document.getElementById('lineCount');
+  const kvBody = document.getElementById('kvBody');
+  const fixPill = document.getElementById('fixPill');
+
+  let port, reader, readableStreamClosed;
+  let lineBuffer = '';              // buffered text between chunks (handles \r\n / \n / \r)
+  let linesShown = 0;
+  const MAX_RAW_CHARS = 20000;
+
+  // Default field order (matches your transmitter)
+  const defaultHeaders = [
+    "TimeSeconds","AccelerationZ_mps2","Altitude_m","MaxAltitude_m",
+    "GPSAltitude_m","Latitude_deg","Longitude_deg","Voltage_V",
+    "Status","PacketCount","Satellites"
+  ];
+  let headers = [...defaultHeaders];
+
+  // Map of header -> <td> element for quick updates
+  let valueCells = {};
+
+  // Build the 2-column table (one row per variable)
+  function buildKVTable(headerList){
+    kvBody.innerHTML = '';
+    valueCells = {};
+    headerList.forEach(h => {
+      const tr = document.createElement('tr');
+      const tdKey = document.createElement('td');
+      const tdVal = document.createElement('td');
+      tdKey.textContent = h;
+      tdVal.textContent = '—';
+      tr.appendChild(tdKey);
+      tr.appendChild(tdVal);
+      kvBody.appendChild(tr);
+      valueCells[h] = tdVal;
+    });
+  }
+  buildKVTable(headers);
+
+  function updateKV(values){
+    // pad short rows
+    while (values.length < headers.length) values.push('');
+    headers.forEach((h, i) => {
+      const cell = valueCells[h];
+      if (cell) cell.textContent = (values[i] ?? '').trim();
+    });
+  }
+
+  function appendRaw(text){
+    rawDiv.textContent += text;
+    if (rawDiv.textContent.length > MAX_RAW_CHARS) {
+      rawDiv.textContent = rawDiv.textContent.slice(-Math.floor(MAX_RAW_CHARS * 0.9));
+    }
+    rawDiv.scrollTop = rawDiv.scrollHeight;
+  }
+
+  function setOnline(on){ dot.classList.toggle('status', on); }
+  function setStream(state){
+    streamState.textContent = state;
+    if(state === 'reading'){ streamState.classList.add('ok'); streamState.classList.remove('bad'); }
+    else if (state === 'idle'){ streamState.classList.remove('ok','bad'); }
+    else { streamState.classList.add('bad'); streamState.classList.remove('ok'); }
+  }
+
+  // --- CSV parsing ---
+  function isHeaderRow(line){
+    // treat as header if it contains any known field name
+    return /TimeSeconds|AccelerationZ_mps2|Altitude_m|Latitude_deg|Longitude_deg|PacketCount|Satellites/i.test(line);
+  }
+
+  function parseCSV(line){
+    // Simple CSV split (no quoted commas expected from your stream)
+    return line.split(',').map(s => s.trim());
+  }
+
+  // Update map from current values using header names (with sensible fallbacks)
+  function updateMapFromValues(vals){
+    const idxOf = name => headers.indexOf(name);
+    const latIdx = (idxOf("Latitude_deg") >= 0) ? idxOf("Latitude_deg") : 5;
+    const lonIdx = (idxOf("Longitude_deg") >= 0) ? idxOf("Longitude_deg") : 6;
+    const satsIdx = (idxOf("Satellites") >= 0) ? idxOf("Satellites") : 10;
+
+    const lat = parseFloat(vals[latIdx]);
+    const lon = parseFloat(vals[lonIdx]);
+    const sats = parseInt(vals[satsIdx] || '0', 10);
+
+    if (validLatLon(lat, lon)) {
+      fixPill.textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}  (sats: ${isFinite(sats)?sats:'?'})`;
+      fixPill.classList.add('ok'); fixPill.classList.remove('bad');
+      const ll = [lat, lon];
+      if (!marker) { marker = L.marker(ll).addTo(map).bindPopup('Receiver'); }
+      else { marker.setLatLng(ll); }
+      path.addLatLng(ll);
+      if (!firstFix) { firstFix = true; map.setView(ll, 16); }
+    } else {
+      fixPill.textContent = `no fix`;
+      fixPill.classList.remove('ok'); fixPill.classList.add('bad');
+    }
+  }
+
+  function processLine(line){
+    if(!line) return;
+    linesShown++;
+    lineCountEl.textContent = `Lines: ${linesShown}`;
+
+    // Header detection & rebuild the KV table with those labels
+    if (isHeaderRow(line)) {
+      const hs = parseCSV(line);
+      if (hs.length >= 2) {
+        headers = hs;
+        buildKVTable(headers);
+      }
+      return;
+    }
+
+    const vals = parseCSV(line);
+    if (vals.length < 1) return;
+
+    updateKV(vals);
+    updateMapFromValues(vals);
+  }
+
+  // --- Map setup ---
+  const map = L.map('map', { zoomControl:true }).setView([-37.787, 175.279], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+  let marker = null;
+  let path = L.polyline([], {weight:3, opacity:0.9}).addTo(map);
+  let firstFix = false;
+
+  function validLatLon(lat, lon){
+    if (!isFinite(lat) || !isFinite(lon)) return false;
+    if (lat === 0 && lon === 0) return false;
+    return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+  }
+
+  // --- Serial w/ robust buffered reader ---
+  async function connect(){
+    if (!('serial' in navigator)) { alert('Web Serial API not supported in this browser. Use Chrome/Edge.'); return; }
+    try{
+      port = await navigator.serial.requestPort({});
+      await port.open({ baudRate: parseInt(baudSel.value, 10) });
+
+      const decoder = new TextDecoderStream();
+      readableStreamClosed = port.readable.pipeTo(decoder.writable);
+      reader = decoder.readable.getReader();
+
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+      setOnline(true);
+      setStream('reading');
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          appendRaw(value);
+          lineBuffer += value;
+
+          // BUFFER: split on any newline type; keep last partial line in buffer
+          const parts = lineBuffer.split(/\r\n|\n|\r/);
+          lineBuffer = parts.pop(); // unfinished tail stays in buffer
+          for (const line of parts) processLine(line);
+        }
+      }
+    } catch (err){
+      console.error(err);
+      setStream('error');
+    } finally {
+      await disconnect();
+    }
+  }
+
+  async function disconnect(){
+    try{
+      if (reader) { await reader.cancel().catch(()=>{}); reader.releaseLock(); reader = null; }
+      if (readableStreamClosed) { await readableStreamClosed.catch(()=>{}); readableStreamClosed = null; }
+      if (port) { await port.close().catch(()=>{}); port = null; }
+    } finally{
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      setOnline(false);
+      if (streamState.textContent !== 'error') setStream('idle');
+    }
+  }
+
+  // --- Event wiring ---
+  connectBtn.addEventListener('click', connect);
+  disconnectBtn.addEventListener('click', disconnect);
+  clearBtn.addEventListener('click', () => { rawDiv.textContent=''; linesShown=0; lineCountEl.textContent=''; });
+
+  // Optional: auto-reconnect to previously authorized port
+  navigator.serial?.getPorts?.().then(async ports=>{
+    if (ports.length){
+      // // Uncomment to auto-open first found:
+      // port = ports[0];
+      // await port.open({ baudRate: parseInt(baudSel.value, 10) });
+      // const decoder = new TextDecoderStream();
+      // readableStreamClosed = port.readable.pipeTo(decoder.writable);
+      // reader = decoder.readable.getReader();
+      // setOnline(true); setStream('reading');
+    }
+  });
+})();
+</script>
+</body>
+</html>
