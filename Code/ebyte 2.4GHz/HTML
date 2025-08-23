@@ -3,108 +3,247 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Ground Station — Telemetry + Control</title>
+<title>🚀 Ground Station — Telemetry + Control</title>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
+
 <style>
-  :root{--bg:#f5f5f7;--card:#fff;--text:#111;--muted:#666;--accent:#0b5;--danger:#d33;--border:#e5e5ea}
-  html,body{height:100%} body{margin:0;background:var(--bg);color:var(--text);font-family:Helvetica,Arial,sans-serif}
-  .wrap{max-width:1200px;margin:auto;padding:20px}
-  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
-  .btn{background:var(--text);color:#fff;border:none;padding:10px 14px;border-radius:10px;cursor:pointer}
-  .btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border)}
-  select,input{padding:10px;border-radius:10px;border:1px solid var(--border);background:#fff}
-  .status-dot{width:10px;height:10px;border-radius:50%;background:var(--danger);display:inline-block;margin-left:6px}
-  .status.online{background:var(--accent)}
-  .grid{display:grid;grid-template-columns: 1fr 1fr; gap:16px}
-  .card{background:var(--card);border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.06);padding:16px;overflow:hidden}
-  h2{font-size:18px;margin:0 0 10px}
-  #raw{height:220px;background:#0a0a0a;color:#e5e5e5;font-family:ui-monospace,Menlo,Consolas,monospace;padding:12px;border-radius:12px;overflow:auto;white-space:pre-wrap;border:1px solid #222}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  th,td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left}
-  th{color:var(--muted);font-weight:600;background:#fafafa;position:sticky;top:0}
-  #map{height:420px;border-radius:12px}
-  .pill{font-size:12px;color:#fff;background:var(--muted);padding:3px 8px;border-radius:999px;margin-left:6px}
-  .ok{background:var(--accent)} .bad{background:#c33} .muted{color:var(--muted)}
-  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  /* ===== Rocket Controller Theme (dark + neon) ===== */
+  :root{
+    --bg:#0b0f1a; --panel:#101626; --panel2:#0f1424; --edge:#1b2440;
+    --text:#e7eefc; --muted:#9bb0d0; --accent:#00ffc3; --accent2:#30a5ff;
+    --danger:#ff4d6d; --warn:#ffb703; --good:#21d07a;
+    --grid:linear-gradient(rgba(48,165,255,.08) 1px, transparent 1px),linear-gradient(90deg, rgba(48,165,255,.08) 1px, transparent 1px);
+  }
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    letter-spacing:.2px;
+  }
+  .wrap{max-width:1300px; margin:0 auto; padding:18px;}
+  .titlebar{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;
+  }
+  .title{display:flex; gap:10px; align-items:center; font-weight:700; letter-spacing:.6px;}
+  .badge-dot{width:10px;height:10px;border-radius:999px;background:#394a78;display:inline-block;margin-left:8px}
+  .online{background:var(--good)}
+  .btn{
+    background:linear-gradient(180deg, #233153, #111729);
+    border:1px solid #2a3a64; color:var(--text);
+    padding:10px 14px; border-radius:10px; cursor:pointer;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .btn:disabled{opacity:.45; cursor:not-allowed}
+  .btn.primary{border-color: #2fb591; background:linear-gradient(180deg, #0d2f2a, #0b2622); color:#dffef4}
+  .btn.warn{border-color:#8a5a00; background:linear-gradient(180deg,#2a1e00,#201700)}
+  .btn.sm{padding:6px 10px; font-size:13px; border-radius:8px}
+  .select, .input{
+    background:#0e1527; color:var(--text); border:1px solid #2a3a64; border-radius:10px; padding:10px 12px;
+  }
+  .input.sm{padding:6px 8px; font-size:13px; border-radius:8px}
+
+  .grid{display:grid; grid-template-columns:320px 1fr; gap:16px;}
+  .card{
+    background:linear-gradient(var(--panel), var(--panel2));
+    border:1px solid var(--edge); border-radius:14px; padding:12px;
+    box-shadow:0 10px 30px rgba(0,0,0,.25);
+  }
+  .card h2{margin:0 0 8px; font-size:14px; color:#d6e3ff; letter-spacing:.4px; text-transform:uppercase}
+
+  /* Compact control rows */
+  .controls .row{
+    display:grid; grid-template-columns: 1fr auto auto; gap:6px; align-items:center;
+    padding:8px; border-radius:10px; border:1px solid #1a2442; background:#0c1324;
+  }
+  .controls .row + .row{margin-top:6px}
+  .label{font-weight:600; font-size:13px;}
+  .status{
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+    padding:3px 8px; border-radius:999px; border:1px solid #2a3a64; background:#0d1426; color:#cfe2ff;
+    min-width:96px; text-align:center; white-space:nowrap;
+  }
+  .status.good{color:#dffef4; border-color:#178e69; background:#0d2f2a}
+  .status.warn{color:#ffe7b3; border-color:#8a5a00; background:#2a1e00}
+  .status.bad{ color:#ffd6de; border-color:#8e1b32; background:#2a0d17}
+
+  /* telemetry strip */
+  .strip{display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; margin-bottom:12px;}
+  .tile{background:#0d1426; border:1px solid #1a2442; border-radius:12px; padding:8px;}
+  .tile .k{font-size:10px; color:#8aa1c9; text-transform:uppercase; letter-spacing:.6px}
+  .tile .v{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:15px; margin-top:3px; color:#d6f0ff}
+
+  #map{height:420px; border:1px solid #1a2442; border-radius:12px; overflow:hidden}
+  #raw{
+    height:180px; background:#050912; color:#b8cae9; border:1px solid #1a2442;
+    border-radius:12px; padding:8px; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th, td{padding:8px 10px; border-bottom:1px solid #1a2442;}
+  th{color:#9bb0d0; text-align:left; position:sticky; top:0; background:#0f1528}
+
+  .bggrid{ background-image:var(--grid); background-size:24px 24px; background-position:0 0; border-radius:14px; padding:8px;}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="toolbar">
-    <button id="connectBtn" class="btn">Connect</button>
-    <button id="disconnectBtn" class="btn secondary" disabled>Disconnect</button>
-    <label>Baud
-      <select id="baud">
-        <option selected>9600</option>
-        <option>19200</option><option>38400</option>
-        <option>57600</option><option>115200</option>
-        <option>230400</option><option>460800</option>
-      </select>
-    </label>
-    <span class="muted">Status <span id="dot" class="status-dot"></span></span>
-    <span id="lineCount" class="muted"></span>
-    <button id="clearBtn" class="btn secondary">Clear Log</button>
+  <div class="titlebar">
+    <div class="title">
+      <span style="font-size:20px">🚀 Ground Station</span>
+      <span style="font-size:12px;color:#9bb0d0">Serial Telemetry & Controller</span>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center">
+      <button id="connectBtn" class="btn primary">Connect</button>
+      <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
+      <label style="font-size:12px;color:#9bb0d0">Baud
+        <select id="baud" class="select">
+          <option selected>9600</option>
+          <option>19200</option><option>38400</option>
+          <option>57600</option><option>115200</option>
+          <option>230400</option><option>460800</option>
+        </select>
+      </label>
+      <span style="font-size:12px;color:#9bb0d0">Link <span id="dot" class="badge-dot"></span></span>
+      <span id="lineCount" style="font-size:12px;color:#9bb0d0"></span>
+    </div>
   </div>
 
-  <div class="controls">
-    <button id="btnArm" class="btn secondary" disabled>Arm</button>
-    <button id="btnDisarm" class="btn secondary" disabled>Disarm</button>
-    <button id="btnResetTime" class="btn secondary" disabled>Reset Time</button>
-
-    <button id="btnLogOn" class="btn secondary" disabled>Log ON</button>
-    <button id="btnLogOff" class="btn secondary" disabled>Log OFF</button>
-    <button id="btnNewFile" class="btn secondary" disabled>New Log File</button>
-
-    <button id="btnFireServo" class="btn secondary" disabled>Fire Servo</button>
-    <label>Angle
-      <input id="servoAngle" type="number" value="90" min="0" max="180" style="width:80px"/>
-      <button id="btnSetAngle" class="btn secondary" disabled>Set Servo</button>
-    </label>
-
-    <button id="btnBuzzerOn" class="btn secondary" disabled>Buzzer ON</button>
-    <button id="btnBuzzerOff" class="btn secondary" disabled>Buzzer OFF</button>
-
-    <button id="btnAutoOn" class="btn secondary" disabled>AutoDeploy ON</button>
-    <button id="btnAutoOff" class="btn secondary" disabled>AutoDeploy OFF</button>
+  <!-- Telemetry strip -->
+  <div class="strip">
+    <div class="tile"><div class="k">Altitude</div><div id="t_alt" class="v">—</div></div>
+    <div class="tile"><div class="k">VSpeed</div><div id="t_vspd" class="v">—</div></div>
+    <div class="tile"><div class="k">Speed</div><div id="t_sog" class="v">—</div></div>
+    <div class="tile"><div class="k">Sats</div><div id="t_sats" class="v">—</div></div>
+    <div class="tile"><div class="k">HDOP</div><div id="t_hdop" class="v">—</div></div>
+    <div class="tile"><div class="k">Battery</div><div id="t_batt" class="v">—</div></div>
+    <div class="tile"><div class="k">Packet</div><div id="t_pkt" class="v">—</div></div>
   </div>
 
-  <div class="grid" style="margin-top:12px">
-    <div class="card">
-      <h2>Raw Data <span id="streamState" class="pill">idle</span></h2>
-      <div id="raw"></div>
+  <div class="grid">
+    <!-- LEFT: compact controls -->
+    <div>
+      <div class="card controls">
+        <h2>Safety & Arming</h2>
+        <div class="row">
+          <div class="label">System Status</div>
+          <div id="statusBadge" class="status">—</div>
+          <div>
+            <button id="btnArm" class="btn sm">Arm</button>
+            <button id="btnDisarm" class="btn sm warn">Disarm</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">Mission Time</div>
+          <div class="status" id="timeBadge">t = — s</div>
+          <div><button id="btnResetTime" class="btn sm">Reset</button></div>
+        </div>
+      </div>
+
+      <div class="card controls" style="margin-top:10px">
+        <h2>Logging & Storage</h2>
+        <div class="row">
+          <div class="label">Logging</div>
+          <div id="logBadge" class="status">OFF</div>
+          <div>
+            <button id="btnLogOn" class="btn sm">On</button>
+            <button id="btnLogOff" class="btn sm warn">Off</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">Entries</div>
+          <div id="entriesBadge" class="status">0</div>
+          <div><button id="btnNewFile" class="btn sm">New File</button></div>
+        </div>
+        <div class="row">
+          <div class="label">Current File</div>
+          <div id="fileBadge" class="status" style="max-width:160px; overflow:hidden; text-overflow:ellipsis;">—</div>
+          <div></div>
+        </div>
+      </div>
+
+      <div class="card controls" style="margin-top:10px">
+        <h2>Actuators</h2>
+        <div class="row">
+          <div class="label">Recovery Servo</div>
+          <div id="servoBadge" class="status">angle —°</div>
+          <div><button id="btnFireServo" class="btn sm">Fire</button></div>
+        </div>
+        <div class="row">
+          <div class="label">Set Servo Angle</div>
+          <div><input id="servoAngle" type="number" class="input sm" value="90" min="0" max="180" style="width:80px"></div>
+          <div><button id="btnSetAngle" class="btn sm">Set</button></div>
+        </div>
+        <div class="row">
+          <div class="label">Buzzer</div>
+          <div id="buzzerBadge" class="status">OFF</div>
+          <div>
+            <button id="btnBuzzerOn" class="btn sm">On</button>
+            <button id="btnBuzzerOff" class="btn sm warn">Off</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <h2>Event Log</h2>
+        <div id="ackLog" style="margin-top:6px; max-height:110px; overflow:auto; font-family:ui-monospace,Menlo,Consolas,monospace; background:#0d1426; border:1px solid #1a2442; border-radius:10px; padding:6px"></div>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>Parsed (Variable / Value)</h2>
-      <table id="kvTable">
-        <thead><tr><th>Variable</th><th>Value</th></tr></thead>
-        <tbody id="kvBody"></tbody>
-      </table>
-    </div>
+    <!-- RIGHT: Map, Raw, Parsed -->
+    <div class="bggrid">
+      <div class="card">
+        <h2>Live Map <span id="fixPill" class="status">no fix</span></h2>
+        <div id="map"></div>
+      </div>
 
-    <div class="card" style="grid-column:1 / -1">
-      <h2>Live Map <span id="fixPill" class="pill">no fix</span></h2>
-      <div id="map"></div>
+      <div class="card">
+        <h2>Raw Serial</h2>
+        <div id="raw"></div>
+      </div>
+
+      <div class="card">
+        <h2>Parsed (Variable / Value)</h2>
+        <table>
+          <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+          <tbody id="kvBody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 (() => {
-  // --- UI refs ---
+  /* ===== DOM refs ===== */
   const connectBtn = document.getElementById('connectBtn');
   const disconnectBtn = document.getElementById('disconnectBtn');
-  const clearBtn = document.getElementById('clearBtn');
   const baudSel = document.getElementById('baud');
   const dot = document.getElementById('dot');
-  const rawDiv = document.getElementById('raw');
-  const streamState = document.getElementById('streamState');
   const lineCountEl = document.getElementById('lineCount');
+  const rawDiv = document.getElementById('raw');
   const kvBody = document.getElementById('kvBody');
   const fixPill = document.getElementById('fixPill');
 
-  // Control buttons
+  // Telemetry strip
+  const t_alt  = document.getElementById('t_alt');
+  const t_vspd = document.getElementById('t_vspd');
+  const t_sog  = document.getElementById('t_sog');
+  const t_sats = document.getElementById('t_sats');
+  const t_hdop = document.getElementById('t_hdop');
+  const t_batt = document.getElementById('t_batt');
+  const t_pkt  = document.getElementById('t_pkt');
+
+  // Controls + status badges
+  const statusBadge = document.getElementById('statusBadge');
+  const timeBadge   = document.getElementById('timeBadge');
+  const logBadge    = document.getElementById('logBadge');
+  const fileBadge   = document.getElementById('fileBadge');
+  const entriesBadge= document.getElementById('entriesBadge');
+  const servoBadge  = document.getElementById('servoBadge');
+  const buzzerBadge = document.getElementById('buzzerBadge');
+  const ackLog      = document.getElementById('ackLog');
+
   const btnArm = document.getElementById('btnArm');
   const btnDisarm = document.getElementById('btnDisarm');
   const btnResetTime = document.getElementById('btnResetTime');
@@ -116,14 +255,13 @@
   const btnSetAngle = document.getElementById('btnSetAngle');
   const btnBuzzerOn = document.getElementById('btnBuzzerOn');
   const btnBuzzerOff = document.getElementById('btnBuzzerOff');
-  const btnAutoOn = document.getElementById('btnAutoOn');
-  const btnAutoOff = document.getElementById('btnAutoOff');
 
+  /* ===== Serial plumbing ===== */
   let port, reader, writer, decoder, lineStream, inputDone;
   let linesShown = 0;
-  const MAX_RAW_CHARS = 40000;
+  const MAX_RAW_CHARS = 50000;
 
-  // Default headers (match transmitter, incl. SD fields)
+  // Telemetry header (must match firmware)
   const defaultHeaders = [
     "TimeSeconds",
     "AccelerationX_mps2","AccelerationY_mps2","AccelerationZ_mps2","AccelerationMagnitude_mps2","GForce_g",
@@ -138,6 +276,7 @@
 
   let headers = [...defaultHeaders];
   let valueCells = {};
+  let lastVals = [];
   buildKVTable(headers);
 
   function buildKVTable(hs){
@@ -150,47 +289,106 @@
     });
   }
   function updateKV(values){
+    lastVals = values.slice();
     while(values.length < headers.length) values.push('');
     headers.forEach((h,i)=>{ if(valueCells[h]) valueCells[h].textContent = (values[i] ?? '').trim(); });
+    updateDashboard(); // refresh tiles/badges
   }
 
+  function get(h){ const idx=headers.indexOf(h); return idx>=0 ? lastVals[idx] : ''; }
+  function getNum(h){ const v=get(h); const n=parseFloat(v); return isFinite(n)?n:NaN; }
+
+  /* ===== UI helpers ===== */
+  function setOnline(on){ dot.classList.toggle('online', on); }
+  function enableControls(on){
+    [btnArm,btnDisarm,btnResetTime,btnLogOn,btnLogOff,btnNewFile,
+     btnFireServo,btnSetAngle,btnBuzzerOn,btnBuzzerOff]
+     .forEach(el => el.disabled = !on);
+  }
   function appendRaw(t){
     rawDiv.textContent += t;
     if (rawDiv.textContent.length > MAX_RAW_CHARS)
-      rawDiv.textContent = rawDiv.textContent.slice(-Math.floor(MAX_RAW_CHARS*0.9));
+      rawDiv.textContent = rawDiv.textContent.slice(-Math.floor(MAX_RAW_CHARS*.9));
     rawDiv.scrollTop = rawDiv.scrollHeight;
   }
-  function setOnline(on){ dot.classList.toggle('status', on); }
-  function setStream(s){ streamState.textContent=s; streamState.classList.toggle('ok',s==='reading'); streamState.classList.toggle('bad',s==='error'); if(s==='idle'){streamState.classList.remove('ok','bad');}}
-  function parseCSV(line){ return line.split(',').map(s=>s.trim()); }
+  function badge(el, txt, cls){
+    el.textContent = txt;
+    el.classList.remove('good','bad','warn');
+    if (cls) el.classList.add(cls);
+  }
+  function addAck(kind,msg){
+    const line = document.createElement('div');
+    const ts = new Date().toLocaleTimeString();
+    line.textContent = `[${ts}] ${kind}: ${msg}`;
+    line.style.color = (kind==="ACK") ? "#aef8e1" : "#ffd0db";
+    ackLog.appendChild(line);
+    ackLog.scrollTop = ackLog.scrollHeight;
+  }
 
+  /* ===== Map ===== */
+  const map = L.map('map',{zoomControl:true}).setView([0,0],2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  let marker=null, path=L.polyline([], {weight:3, opacity:.9, color:"#30a5ff"}).addTo(map), firstFix=false;
+
+  function validLatLon(lat,lon){ return isFinite(lat)&&isFinite(lon)&&lat>=-90&&lat<=90&&lon>=-180&&lon<=180 && !(lat===0&&lon===0); }
+  function updateMapFromValues(vals){
+    const latIdx=headers.indexOf("Latitude_deg"); const li=(latIdx>=0)?latIdx:16;
+    const lonIdx=headers.indexOf("Longitude_deg");const lo=(lonIdx>=0)?lonIdx:17;
+    const satIdx=headers.indexOf("Satellites");   const si=(satIdx>=0)?satIdx:21;
+    const lat=parseFloat(vals[li]); const lon=parseFloat(vals[lo]); const sats=parseInt(vals[si]||'0',10);
+    if(validLatLon(lat,lon)){
+      badge(fixPill, `${lat.toFixed(6)}, ${lon.toFixed(6)} (sats:${isFinite(sats)?sats:'?'})`, "good");
+      const ll=[lat,lon];
+      if(!marker){ marker=L.marker(ll).addTo(map).bindPopup('Receiver'); } else { marker.setLatLng(ll); }
+      path.addLatLng(ll); if(!firstFix){ firstFix=true; map.setView(ll,16); }
+    } else {
+      badge(fixPill, `no fix`, "warn");
+    }
+  }
+
+  /* ===== Dashboard update from latest values ===== */
+  function updateDashboard(){
+    // strip
+    const alt  = getNum("Altitude_m");         t_alt.textContent  = isFinite(alt)? alt.toFixed(1)+" m":"—";
+    const vspd = getNum("VerticalSpeed_mps");  t_vspd.textContent = isFinite(vspd)? vspd.toFixed(2)+" m/s":"—";
+    const sog  = getNum("SpeedOverGround_mps");t_sog.textContent  = isFinite(sog)? sog.toFixed(2)+" m/s":"—";
+    const sats = parseInt(get("Satellites")||"0",10); t_sats.textContent = isFinite(sats)? String(sats) : "—";
+    const hdop = getNum("HDOP");               t_hdop.textContent = isFinite(hdop)? hdop.toFixed(2):"—";
+    const batt = getNum("BatteryPercent");     t_batt.textContent = isFinite(batt)? batt.toFixed(0)+"% ("+ (getNum("Voltage_V")||0).toFixed(2)+"V )" : "—";
+    const pkt  = get("PacketCount");           t_pkt.textContent  = pkt || "—";
+
+    // badges
+    const status = (get("Status")||"").toUpperCase();
+    if (status==="ARMED")      badge(statusBadge, "Armed", "good");
+    else if (status==="FIRED") badge(statusBadge, "Fired", "bad");
+    else if (status==="DISARMED") badge(statusBadge, "Disarmed", "warn");
+    else badge(statusBadge, get("Status")||"—");
+
+    const tsec = getNum("TimeSeconds");
+    badge(timeBadge, isFinite(tsec)? `t = ${tsec.toFixed(0)} s` : "t = —", null);
+
+    const sdOn = get("SDEnabled")==="1";
+    badge(logBadge, sdOn? "ON" : "OFF", sdOn? "good":"warn");
+    badge(entriesBadge, get("SDEntries")||"0", null);
+    const file = get("SDFile")||"—";
+    badge(fileBadge, (file.length>18? file.slice(0,18)+"…":file), null);
+
+    const ang = getNum("ServoAngle_deg");
+    badge(servoBadge, isFinite(ang)? `angle ${ang.toFixed(0)}°` : "angle —°", null);
+
+    const buzz = get("BuzzerOn")==="1";
+    badge(buzzerBadge, buzz? "ON":"OFF", buzz? "good":"warn");
+  }
+
+  /* ===== CSV & Header handling ===== */
+  function parseCSV(line){ return line.split(',').map(s => s.trim()); }
   function isCanonicalHeader(line){
     const hs = parseCSV(line);
     const matches = hs.filter(h => canonicalSet.has(h)).length;
     return matches >= 6;
   }
 
-  // Map
-  const map = L.map('map',{zoomControl:true}).setView([-37.787,175.279],12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
-  let marker=null; let path=L.polyline([], {weight:3, opacity:.9}).addTo(map); let firstFix=false;
-
-  function validLatLon(lat,lon){ if(!isFinite(lat)||!isFinite(lon)) return false; if(lat===0&&lon===0) return false; return lat>=-90&&lat<=90&&lon>=-180&&lon<=180; }
-  function updateMapFromValues(vals){
-    const latIdx = headers.indexOf("Latitude_deg");  const li = (latIdx>=0)?latIdx:16;
-    const lonIdx = headers.indexOf("Longitude_deg"); const lo = (lonIdx>=0)?lonIdx:17;
-    const satIdx = headers.indexOf("Satellites");    const si = (satIdx>=0)?satIdx:21;
-    const lat=parseFloat(vals[li]); const lon=parseFloat(vals[lo]); const sats=parseInt(vals[si]||'0',10);
-    if(validLatLon(lat,lon)){
-      fixPill.textContent=`${lat.toFixed(6)}, ${lon.toFixed(6)} (sats: ${isFinite(sats)?sats:'?'})`;
-      fixPill.classList.add('ok'); fixPill.classList.remove('bad');
-      const ll=[lat,lon];
-      if(!marker){ marker=L.marker(ll).addTo(map).bindPopup('Receiver'); } else { marker.setLatLng(ll); }
-      path.addLatLng(ll); if(!firstFix){ firstFix=true; map.setView(ll,16); }
-    } else { fixPill.textContent='no fix'; fixPill.classList.remove('ok'); fixPill.classList.add('bad'); }
-  }
-
-  // Buffered line reader
+  /* ===== Buffered line reader ===== */
   class LineBreakTransformer {
     constructor(){ this.container=''; }
     transform(chunk, controller){
@@ -202,7 +400,7 @@
     flush(controller){ if(this.container) controller.enqueue(this.container); }
   }
 
-  // Serial connect / write / disconnect
+  /* ===== Serial connect / write / disconnect ===== */
   async function connect(){
     if(!('serial' in navigator)){ alert('Web Serial not supported. Use Chrome/Edge over HTTPS.'); return; }
     try{
@@ -221,26 +419,32 @@
       encoder.readable.pipeTo(port.writable);
       writer = encoder.writable.getWriter();
 
-      connectBtn.disabled = true; disconnectBtn.disabled = false;
-      enableControls(true);
-      setOnline(true); setStream('reading'); linesShown=0; lineCountEl.textContent='';
+      connectBtn.disabled = true; disconnectBtn.disabled = false; enableControls(true); setOnline(true);
+      linesShown=0; lineCountEl.textContent='';
 
       while(true){
         const {value, done} = await reader.read();
         if(done) break;
         if(value!=null){
-          appendRaw(value+'\n');
-          if (value.startsWith('#')) continue;        // ignore acks/comments
-          if (isCanonicalHeader(value)) { headers = parseCSV(value); buildKVTable(headers); continue; }
+          if (value.startsWith('#ACK,')){ addAck("ACK", value.substring(5)); continue; }
+          if (value.startsWith('#ERR,')){ addAck("ERR", value.substring(5)); continue; }
 
+          rawDiv.textContent += value+'\n';
+          if (rawDiv.textContent.length > 50000)
+            rawDiv.textContent = rawDiv.textContent.slice(-45000);
+          rawDiv.scrollTop = rawDiv.scrollHeight;
+
+          if (isCanonicalHeader(value)) { headers = parseCSV(value); buildKVTable(headers); continue; }
           const vals = parseCSV(value);
           if(vals.length===0) continue;
+
           updateKV(vals);
           updateMapFromValues(vals);
+
           linesShown++; lineCountEl.textContent = `Lines: ${linesShown}`;
         }
       }
-    } catch(e){ console.error(e); setStream('error'); }
+    } catch(e){ console.error(e); }
     finally { await disconnect(); }
   }
 
@@ -258,40 +462,29 @@
       if (port){ await port.close().catch(()=>{}); port=null; }
     } finally {
       connectBtn.disabled=false; disconnectBtn.disabled=true; setOnline(false);
-      if(streamState.textContent!=='error') setStream('idle');
     }
   }
 
-  function enableControls(on){
-    [btnArm,btnDisarm,btnResetTime,btnLogOn,btnLogOff,btnNewFile,
-     btnFireServo,btnSetAngle,btnBuzzerOn,btnBuzzerOff,btnAutoOn,btnAutoOff]
-     .forEach(el => el.disabled = !on);
-  }
-
-  // Events
+  /* ===== Wire buttons ===== */
   connectBtn.addEventListener('click', connect);
   disconnectBtn.addEventListener('click', disconnect);
-  clearBtn.addEventListener('click', ()=>{ rawDiv.textContent=''; linesShown=0; lineCountEl.textContent=''; });
 
   btnArm.addEventListener('click',       ()=> sendLine("CMD:ARM"));
   btnDisarm.addEventListener('click',    ()=> sendLine("CMD:DISARM"));
   btnResetTime.addEventListener('click', ()=> sendLine("CMD:RESET_TIME"));
 
   btnLogOn.addEventListener('click',     ()=> sendLine("CMD:LOG_ON"));
+  btnLogOff.addEventListener('click',    ()=> sendLine("CMD_LOG_OFF")); // fallback if you renamed, keep old:
   btnLogOff.addEventListener('click',    ()=> sendLine("CMD:LOG_OFF"));
-  btnNewFile.addEventListener('click',   ()=> sendLine("CMD:NEW_FILE"));   // starts a fresh CSV and enables logging
+  btnNewFile.addEventListener('click',   ()=> sendLine("CMD:NEW_FILE"));
 
   btnFireServo.addEventListener('click', ()=> sendLine("CMD:FIRE_SERVO"));
   btnSetAngle.addEventListener('click',  ()=>{
-    const a = Math.max(0, Math.min(180, parseInt(servoAngle.value || "90",10)));
+    const a = Math.max(0, Math.min(180, parseInt(servoAngle.value||"90",10)));
     sendLine("CMD:SET_SERVO:" + a);
   });
-
   btnBuzzerOn.addEventListener('click',  ()=> sendLine("CMD:BUZZER_ON"));
   btnBuzzerOff.addEventListener('click', ()=> sendLine("CMD:BUZZER_OFF"));
-
-  btnAutoOn.addEventListener('click',    ()=> sendLine("CMD:AUTO_DEPLOY_ON"));
-  btnAutoOff.addEventListener('click',   ()=> sendLine("CMD:AUTO_DEPLOY_OFF"));
 })();
 </script>
 </body>
