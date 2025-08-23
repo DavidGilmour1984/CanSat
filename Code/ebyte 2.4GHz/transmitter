@@ -6,6 +6,7 @@
 #include <SD.h>
 #include <SPI.h>
 
+// --- Pins / HW ---
 #define rxGPS 16
 #define txGPS 17
 #define PIN_SPI_CS 5
@@ -17,37 +18,160 @@
 #define SERVO_FREQ 50
 #define SERVO_RES 16
 
+// --- Sensors / IO ---
 Adafruit_BMP280 bmp;
 Adafruit_MPU6050 mpu;
 HardwareSerial GPSSerial(1);
 TinyGPSPlus gps;
 File myFile;
-String filename;
 
-float baseAltitude = 0;
-float maxBMPAltitude = -10000.0;
-unsigned long startTime;
-unsigned long lastSDWrite = 0;
+// --- SD / logging ---
+bool sdReady = false;
+bool loggingEnabled = false;      // <-- default OFF
+String filename = "";             // set when first file is created
+uint32_t sdEntries = 0;
+uint32_t nextFileIndex = 1;
 
+// --- Flight / state ---
+float baseAltitude = 0.0f;
+float maxBMPAltitude = -10000.0f;
+unsigned long startTime = 0;
+unsigned long lastTick = 0;
+unsigned long packetCount = 0;
+
+bool manualArmed = false;         // <-- set from CMD:ARM / CMD:DISARM
+bool autoDeployEnabled = true;    // can be toggled via CMD:AUTO_DEPLOY_ON/OFF
 bool deploymentTriggered = false;
 bool hasPassed300m = false;
 
-float lastValidLatitude = 0.0;
-float lastValidLongitude = 0.0;
+float lastValidLatitude = 0.0f;
+float lastValidLongitude = 0.0f;
 float lastValidGPSAltitude = NAN;
-bool gpsDataAvailable = false;
+bool  gpsDataAvailable = false;
 
-unsigned long packetCount = 0;
+int   servoAngleNow = 0;
+bool  buzzerOn = false;
+
+// Vertical speed (LPF on baro derivative)
+float lastAlt_m = 0.0f;
+unsigned long lastAlt_ms = 0;
+float vSpeed_mps = 0.0f;
+const float VSPEED_ALPHA = 0.80f;
 
 const char* CSV_HEADER =
-  "TimeSeconds,AccelerationZ_mps2,Altitude_m,MaxAltitude_m,GPSAltitude_m,Latitude_deg,Longitude_deg,Voltage_V,Status,PacketCount,Satellites";
+  "TimeSeconds,"
+  "AccelerationX_mps2,AccelerationY_mps2,AccelerationZ_mps2,AccelerationMagnitude_mps2,GForce_g,"
+  "GyroX_dps,GyroY_dps,GyroZ_dps,IMUTemperature_C,"
+  "Pressure_Pa,BMPTemperature_C,Altitude_m,VerticalSpeed_mps,MaxAltitude_m,"
+  "GPSAltitude_m,Latitude_deg,Longitude_deg,SpeedOverGround_mps,Course_deg,HDOP,Satellites,GPSDateTime_UTC,"
+  "Voltage_V,BatteryPercent,FreeHeap_bytes,"
+  "Status,PacketCount,ServoAngle_deg,BuzzerOn,"
+  "SDEnabled,SDEntries,SDFile";
 
 int angleToDuty(int angle) {
-  // 16-bit PWM (0..65535): ~1ms (5%) to ~2ms (10%) for typical servo
-  int dutyMin = 3277;
-  int dutyMax = 6553;
+  int dutyMin = 3277;  // ~1ms
+  int dutyMax = 6553;  // ~2ms
   return map(angle, 0, 180, dutyMin, dutyMax);
 }
+
+float batteryPercentFromVoltage(float v) {
+  float pct = (v - 3.30f) / (4.20f - 3.30f) * 100.0f;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  return pct;
+}
+
+String formatGPSDateTimeUTC() {
+  if (gps.date.isValid() && gps.time.isValid()) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+             (int)gps.date.year(), (int)gps.date.month(), (int)gps.date.day(),
+             (int)gps.time.hour(), (int)gps.time.minute(), (int)gps.time.second());
+    return String(buf);
+  }
+  return "";
+}
+
+// ---------- SD helpers ----------
+void ack(const char* what){ Serial.print("#ACK,"); Serial.println(what); }
+void err(const char* what){ Serial.print("#ERR,"); Serial.println(what); }
+
+bool openNewLogFile() {
+  if (!sdReady) { err("SD_NOT_READY"); return false; }
+  // find an unused filename
+  do {
+    filename = "/data_" + String(nextFileIndex++) + ".csv";
+  } while (SD.exists(filename));
+  File f = SD.open(filename, FILE_WRITE);
+  if (!f) { err("SD_OPEN_FAIL"); return false; }
+  f.println(CSV_HEADER);
+  f.close();
+  sdEntries = 0;
+  ack("NEW_FILE");
+  return true;
+}
+
+void writeCSVToSD(const String& csv) {
+  if (!sdReady || !loggingEnabled) return;
+  if (filename.length()==0) {
+    if (!openNewLogFile()) return;
+  }
+  File f = SD.open(filename, FILE_APPEND);
+  if (!f) { err("SD_APPEND_FAIL"); return; }
+  f.println(csv);
+  f.close();
+  sdEntries++;
+}
+// ---------------------------------
+
+// ---------- Command handling ----------
+String cmdBuf;
+
+int clampInt(int v, int lo, int hi){ return (v<lo)?lo:(v>hi)?hi:v; }
+
+void processCommand(const String& raw) {
+  String s = raw; s.trim(); s.toUpperCase();
+
+  if (s == "CMD:RESET_TIME") {
+    startTime = millis(); lastTick = startTime; packetCount = 0; ack("RESET_TIME");
+  }
+  else if (s == "CMD:ARM")          { manualArmed = true; ack("ARM"); }
+  else if (s == "CMD:DISARM")       { manualArmed = false; ack("DISARM"); }
+
+  else if (s == "CMD:LOG_ON")       { loggingEnabled = true; ack("LOG_ON"); }
+  else if (s == "CMD:LOG_OFF")      { loggingEnabled = false; ack("LOG_OFF"); }
+  else if (s == "CMD:NEW_FILE")     { if (openNewLogFile()) { loggingEnabled = true; /* restart logging enabled */ } }
+
+  else if (s == "CMD:BUZZER_ON")    { buzzerOn = true;  digitalWrite(BUZZER_PIN, HIGH); ack("BUZZER_ON"); }
+  else if (s == "CMD:BUZZER_OFF")   { buzzerOn = false; digitalWrite(BUZZER_PIN, LOW);  ack("BUZZER_OFF"); }
+
+  else if (s == "CMD:FIRE_SERVO")   {
+    servoAngleNow = 90; ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(servoAngleNow));
+    deploymentTriggered = true; ack("FIRE_SERVO");
+  }
+  else if (s.startsWith("CMD:SET_SERVO:")) {
+    int angle = s.substring(strlen("CMD:SET_SERVO:")).toInt();
+    angle = clampInt(angle, 0, 180);
+    servoAngleNow = angle; ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(servoAngleNow));
+    ack("SET_SERVO");
+  }
+  else if (s == "CMD:AUTO_DEPLOY_ON")  { autoDeployEnabled = true;  ack("AUTO_DEPLOY_ON"); }
+  else if (s == "CMD:AUTO_DEPLOY_OFF") { autoDeployEnabled = false; ack("AUTO_DEPLOY_OFF"); }
+
+  else if (s == "PING") { ack("PONG"); }
+}
+
+void pollCommands() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c=='\n' || c=='\r') {
+      if (cmdBuf.length()) { processCommand(cmdBuf); cmdBuf=""; }
+    } else {
+      if (isPrintable(c) || c==' ' || c==':' || c=='_' || c==',') cmdBuf += c;
+    }
+  }
+}
+// --------------------------------------
 
 void setup() {
   Serial.begin(9600);
@@ -55,49 +179,37 @@ void setup() {
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
+  buzzerOn = false;
 
   ledcSetup(SERVO_PWM_CHANNEL, SERVO_FREQ, SERVO_RES);
   ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+  servoAngleNow = 0;
+  ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(servoAngleNow));
 
-  if (!bmp.begin(0x76)) {
-    Serial.println("BMP280 not found!");
-    while (1) { delay(100); }
-  }
+  if (!bmp.begin(0x76)) { Serial.println("BMP280 not found!"); while (1) delay(100); }
   baseAltitude = bmp.readAltitude(1013.25);
 
   GPSSerial.begin(9600, SERIAL_8N1, rxGPS, txGPS);
 
-  if (!mpu.begin()) {
-    Serial.println("MPU6050 not found!");
-    while (1) { delay(100); }
-  }
+  if (!mpu.begin()) { Serial.println("MPU6050 not found!"); while (1) delay(100); }
   mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+  mpu.setGyroRange(MPU6050_RANGE_2000_DEG);
 
-  // SD init and header
-  if (!SD.begin(PIN_SPI_CS)) {
-    Serial.println("SD Card init failed!");
-  } else {
-    int fileIndex = 1;
-    do {
-      filename = "/data_" + String(fileIndex) + ".csv";
-      fileIndex++;
-    } while (SD.exists(filename));
-    myFile = SD.open(filename, FILE_WRITE);
-    if (myFile) {
-      myFile.println(CSV_HEADER);
-      myFile.close();
-    }
-  }
+  // SD present?
+  sdReady = SD.begin(PIN_SPI_CS);
+  if (!sdReady) { Serial.println("#WARN,SD_INIT_FAILED"); }
+  // Do NOT create a file here; wait for CMD:NEW_FILE or CMD:LOG_ON
 
-  // Mirror header to Serial
   Serial.println(CSV_HEADER);
 
   startTime = millis();
+  lastTick  = startTime;
+  lastAlt_m  = bmp.readAltitude(1013.25) - baseAltitude;
+  lastAlt_ms = millis();
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-  float elapsed = (currentMillis - startTime) / 1000.0f;
+  pollCommands();
 
   // GPS feed
   while (GPSSerial.available()) gps.encode(GPSSerial.read());
@@ -108,62 +220,100 @@ void loop() {
     gpsDataAvailable = true;
   }
 
-  int satCount = gps.satellites.isValid() ? (int)gps.satellites.value() : 0;
-
   // Sensors
   float bmpAltitude = bmp.readAltitude(1013.25) - baseAltitude;
   if (bmpAltitude > maxBMPAltitude) maxBMPAltitude = bmpAltitude;
 
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
-  float accelerationZ = a.acceleration.z; // m/s^2
+  float pressurePa  = bmp.readPressure();
+  float bmpTempC    = bmp.readTemperature();
 
-  // Voltage (adjust divider factor if needed)
+  sensors_event_t a, g, tEvent;
+  mpu.getEvent(&a, &g, &tEvent);
+  float ax = a.acceleration.x, ay = a.acceleration.y, az = a.acceleration.z;
+  float gx = g.gyro.x * 180.0f/PI, gy = g.gyro.y * 180.0f/PI, gz = g.gyro.z * 180.0f/PI;
+  float imuTempC = tEvent.temperature;
+
+  const float g0 = 9.80665f;
+  float aMag = sqrtf(ax*ax + ay*ay + az*az);
+  float gForce = aMag / g0;
+
+  unsigned long now = millis();
+  float dt_s = (now - lastAlt_ms) / 1000.0f;
+  if (dt_s > 0.0001f) {
+    float instVS = (bmpAltitude - lastAlt_m) / dt_s;
+    vSpeed_mps = VSPEED_ALPHA * vSpeed_mps + (1.0f - VSPEED_ALPHA) * instVS;
+    lastAlt_m = bmpAltitude;
+    lastAlt_ms = now;
+  }
+
   float voltage = analogRead(VOLTAGE_PIN) * (3.3f / 4095.0f) * 1.44f;
+  float battPct = batteryPercentFromVoltage(voltage);
 
-  // Deployment logic
-  String status = "Armed";
-  if (elapsed < 60.0f) {
-    status = "Safe";
-  } else if (!deploymentTriggered) {
+  // Status: ONLY manual ARMED/DISARM + Fired state
+  String status = manualArmed ? "Armed" : "Disarmed";
+
+  // Optional altitude-based auto-deploy (only if enabled AND armed)
+  if (manualArmed && !deploymentTriggered && autoDeployEnabled) {
     if (bmpAltitude >= 300.0f) hasPassed300m = true;
     if (hasPassed300m && bmpAltitude <= 150.0f) {
-      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(90));
+      servoAngleNow = 90;
+      ledcWrite(SERVO_PWM_CHANNEL, angleToDuty(servoAngleNow));
       digitalWrite(BUZZER_PIN, HIGH);
+      buzzerOn = true;
       deploymentTriggered = true;
       status = "Fired";
     }
-  } else {
-    status = "Fired";
   }
+  if (deploymentTriggered) status = "Fired";
 
-  // Log & transmit at 1 Hz
-  if (currentMillis - lastSDWrite >= 1000) {
-    lastSDWrite = currentMillis;
-    packetCount++; // increment per CSV packet
+  // 1 Hz output
+  if (now - lastTick >= 1000) {
+    lastTick = now;
+    packetCount++;
 
-    // Build single CSV row (no abbreviations)
-    String csv =
-      String(elapsed, 3) + "," +
-      String(accelerationZ, 3) + "," +
-      String(bmpAltitude, 3) + "," +
-      String(maxBMPAltitude, 3) + "," +
-      (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude, 3)) + "," +
-      (gpsDataAvailable ? String(lastValidLatitude, 6) : String("0")) + "," +
-      (gpsDataAvailable ? String(lastValidLongitude, 6) : String("0")) + "," +
-      String(voltage, 3) + "," +
-      status + "," +
-      String(packetCount) + "," +
-      String(satCount);
+    double sog_mps   = gps.speed.isValid()  ? gps.speed.mps()  : 0.0;
+    double courseDeg = gps.course.isValid() ? gps.course.deg() : 0.0;
+    double hdopVal   = gps.hdop.isValid()   ? gps.hdop.hdop()  : 0.0;
+    int    sats      = gps.satellites.isValid() ? (int)gps.satellites.value() : 0;
+    String dtUTC     = formatGPSDateTimeUTC();
 
-    // Write to SD
-    myFile = SD.open(filename, FILE_APPEND);
-    if (myFile) {
-      myFile.println(csv);
-      myFile.close();
-    }
+    float elapsed = (now - startTime) / 1000.0f;
 
-    // Mirror exactly to standard Serial
+    String csv; csv.reserve(640);
+    csv += String(elapsed, 3) + ",";
+
+    // IMU
+    csv += String(ax, 3) + "," + String(ay, 3) + "," + String(az, 3) + ",";
+    csv += String(aMag, 3) + "," + String(gForce, 3) + ",";
+    csv += String(gx, 3) + "," + String(gy, 3) + "," + String(gz, 3) + ",";
+    csv += String(imuTempC, 2) + ",";
+
+    // Baro
+    csv += String(pressurePa, 1) + "," + String(bmpTempC, 2) + ",";
+    csv += String(bmpAltitude, 3) + "," + String(vSpeed_mps, 3) + "," + String(maxBMPAltitude, 3) + ",";
+
+    // GPS
+    csv += (isnan(lastValidGPSAltitude) ? "0" : String(lastValidGPSAltitude, 3)) + ",";
+    csv += (gpsDataAvailable ? String(lastValidLatitude, 6) : String("0")) + ",";
+    csv += (gpsDataAvailable ? String(lastValidLongitude, 6) : String("0")) + ",";
+    csv += String(sog_mps, 3) + "," + String(courseDeg, 2) + "," + String(hdopVal, 2) + "," + String(sats) + ",";
+    csv += dtUTC + ",";
+
+    // Power/System
+    csv += String(voltage, 3) + "," + String(battPct, 1) + ",";
+    csv += String(ESP.getFreeHeap()) + ",";
+
+    // Status / events
+    csv += status + "," + String(packetCount) + "," + String(servoAngleNow) + "," + (buzzerOn ? "1" : "0") + ",";
+
+    // SD state
+    csv += (loggingEnabled ? "1" : "0") + String(",") + String(sdEntries) + String(",");
+    csv += (filename.length()? filename : String("none"));
+
+    // SD write (only if enabled)
+    writeCSVToSD(csv);
+
+    // Always mirror to Serial
     Serial.println(csv);
   }
 }
