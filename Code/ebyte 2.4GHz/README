@@ -1,1 +1,287 @@
-this is a stress test of all of the systems to test data transmssion rates
+🚀 ESP32 Rocket Telemetry & Ground Station.
+Aimed to stress test the 2.4ghz tranmsission
+
+A complete, hackable telemetry stack for rockets / high-altitude projects:
+
+Transmitter (ESP32) with BMP280, MPU6050, GPS (TinyGPS++), CSV telemetry at 1 Hz, and optional SD logging.
+
+Receiver (ESP32 + OLED) acting as a USB↔UART bridge and live text display.
+
+Web Ground Station (HTML) using the Web Serial API to show:
+
+Raw serial stream
+
+Parsed table (from CSV header)
+
+Live map (Leaflet) from GPS lat/lon
+
+Mission controls: Arm/Disarm, Reset Time, Log ON/OFF, New Log File, Fire/Set Servo, Set Servo Angle, Buzzer ON/OFF
+
+Status badges for every control (armed state, SD enabled & file name & entry count, servo angle, buzzer state)
+
+Default baud rate across the stack is 9600.
+
+✨ Features
+
+Human-readable CSV (no abbreviations) mirrored to USB serial once per second
+
+Header-first format so tools auto-adapt as you add/remove fields
+
+SD logging is OFF by default; toggle ON/OFF from the Ground Station; create a new CSV file on demand
+
+Command protocol over the same serial link (text lines like CMD:ARM) with #ACK / #ERR feedback
+
+Receiver OLED (small font) shows a scrolling copy of what’s received
+
+Map view with breadcrumb trail; shows sats/HDOP status
+
+Safety-first controls: arming is manual (no timed auto-arm)
+
+🗂 Repo Structure
+/transmitter/esp32_transmitter.ino     # Flight computer firmware (ESP32)
+/receiver/esp32_receiver_oled.ino      # USB↔UART bridge + OLED viewer (ESP32)
+/ground/ground_station.html            # Web ground station (open in Chrome/Edge)
+README.md                              # You are here
+
+🔧 Hardware
+
+Transmitter (ESP32):
+
+BMP280 @ I²C (0x76)
+
+MPU6050 @ I²C
+
+GPS module (e.g., NEO-6M) on UART1 (RX=GPIO16, TX=GPIO17) @ 9600
+
+SD card (SPI), CS = GPIO5
+
+Battery voltage sense → GPIO36 (scale factor in code: 1.44)
+
+Buzzer → GPIO27
+
+Servo → GPIO4 (LEDC PWM ch0, 50 Hz, 16-bit; ~1–2 ms pulse)
+
+Receiver (ESP32):
+
+UART1 <--> your radio/telemetry receiver (RX=16, TX=17)
+
+OLED SSD1306 (I²C) SDA=21, SCL=22, addr 0x3C
+
+You can replace the “radio” with a direct cable if you want to bench test.
+
+🛠 Build & Flash
+Arduino IDE
+
+Board: ESP32 Dev Module
+
+Libraries:
+
+Adafruit BMP280
+
+Adafruit MPU6050
+
+Adafruit Unified Sensor
+
+TinyGPS++
+
+Adafruit GFX + Adafruit SSD1306 (receiver only)
+
+Built-in: SD, SPI, Wire
+
+Open and flash:
+
+transmitter/esp32_transmitter.ino to your air ESP32
+
+receiver/esp32_receiver_oled.ino to your ground ESP32
+
+PlatformIO (optional)
+
+Create two environments targeting espressif32 / esp32dev.
+
+Add libraries above to lib_deps.
+
+🛰 Telemetry Format (CSV)
+
+The transmitter prints a header line once at boot, then one CSV row per second.
+
+Header:
+
+TimeSeconds,
+AccelerationX_mps2,AccelerationY_mps2,AccelerationZ_mps2,AccelerationMagnitude_mps2,GForce_g,
+GyroX_dps,GyroY_dps,GyroZ_dps,IMUTemperature_C,
+Pressure_Pa,BMPTemperature_C,Altitude_m,VerticalSpeed_mps,MaxAltitude_m,
+GPSAltitude_m,Latitude_deg,Longitude_deg,SpeedOverGround_mps,Course_deg,HDOP,Satellites,GPSDateTime_UTC,
+Voltage_V,BatteryPercent,FreeHeap_bytes,
+Status,PacketCount,ServoAngle_deg,BuzzerOn,
+SDEnabled,SDEntries,SDFile
+
+
+Status = Disarmed | Armed | Fired
+
+SDEnabled = 1|0
+
+SDEntries = rows written to the current file
+
+SDFile = current CSV filename (or none)
+
+The Ground Station auto-adopts the header and builds the table dynamically.
+
+🕹 Command Protocol (USB serial)
+
+Send one command per line. Transmitter responds with #ACK,<WHAT> or #ERR,<WHAT>.
+
+Command	Action
+CMD:ARM	Set status → Armed (manual arming only)
+CMD:DISARM	Set status → Disarmed
+CMD:RESET_TIME	Zero mission timer + packet counter
+CMD:LOG_ON	Enable SD logging (creates file if needed)
+CMD:LOG_OFF	Disable SD logging (keeps file on card)
+CMD:NEW_FILE	Start a fresh CSV immediately and enable logging
+CMD:FIRE_SERVO	Set servo to deploy angle (90° by default) & mark Fired
+CMD:SET_SERVO:<0-180>	Set servo to a precise angle
+CMD:BUZZER_ON	Turn buzzer ON
+CMD:BUZZER_OFF	Turn buzzer OFF
+PING	Replies #ACK,PONG
+
+Advanced (not exposed in the default UI): CMD:AUTO_DEPLOY_ON/OFF toggles baro-triggered deployment logic on the transmitter.
+
+🖥 Ground Station (Web)
+
+File: ground/ground_station.html
+
+Run it
+
+The Web Serial API needs HTTPS or localhost:
+
+Quick local server:
+
+cd ground
+python3 -m http.server 8000
+# then open http://localhost:8000/ground_station.html in Chrome/Edge
+
+Use it
+
+Click Connect, pick your receiver’s COM port, keep 9600 baud (default).
+
+Watch the telemetry strip (Altitude, VSpeed, Speed, Sats, HDOP, Battery, Packet).
+
+Use Controls on the left (compact “mission-control” panes):
+
+Safety & Arming: Arm / Disarm, Reset mission time.
+
+Logging: Log ON/OFF, New File, live badges for enabled/file/entry count.
+
+Actuators: Fire servo, set servo angle, buzzer ON/OFF, with live status.
+
+Raw Serial shows the stream; Event Log shows #ACK/#ERR.
+
+Live Map tracks lat/lon; status pill shows sats count.
+
+The UI ignores comment lines starting with # so ACKs don’t pollute the parsed table.
+
+💾 SD Logging
+
+Starts OFF. Turn on from Ground Station (Log ON) or create a new file (New File).
+
+Files are named: /data_<index>.csv (auto-incrementing).
+
+SDEntries in telemetry shows how many rows have been written to the current file.
+
+SDFile shows the current filename.
+
+🧭 Status & Safety Model
+
+Manual arming: system is Disarmed until you press Arm.
+
+Fired is set when the servo is fired (either via command or, if you enable the advanced auto-deploy logic in firmware, by barometric trigger).
+
+The HTML UI ships without any Autopilot section by design (per request).
+
+🧪 Troubleshooting
+
+No ports listed / Connect fails
+Use Chrome or Edge. Firefox doesn’t support Web Serial. Serve over HTTPS or localhost.
+
+Garbled text
+Ensure all devices are at 9600 baud.
+
+No parsed table
+Make sure the transmitter prints the header line on boot (it does by default). The viewer adopts whatever header it sees.
+
+Map shows “no fix”
+You need valid Latitude_deg and Longitude_deg (not 0,0). Check GPS antenna and sky view.
+
+SD not logging
+Logging is OFF by default; press Log ON or New File. Watch #ERR messages in the Event Log (e.g., SD_INIT_FAILED, SD_OPEN_FAIL).
+
+📐 Implementation Notes
+
+PWM servo: LEDC ch0 @ 50 Hz, 16-bit; angle→duty map ≈ 1–2 ms
+
+Vertical speed: low-pass filtered derivative of BMP altitude (VSPEED_ALPHA = 0.80)
+
+Battery %: simple linear model 3.30–4.20 V → 0–100 % (tune for your pack)
+
+Update rate: 1 Hz CSV output, header once at boot
+
+Receiver OLED: small font, ~8 lines, wraps long lines and scrolls
+
+🔒 Security & Privacy
+
+The Web Serial page runs locally; it doesn’t phone home.
+
+Browser access to serial is user-approved per-port, and permissions are revocable.
+
+🧭 Roadmap / Ideas
+
+“Launch Mode” full-screen HUD with hotkeys (A/D arm/disarm, L logging, F fire)
+
+Audible alerts (low battery, low sats, high HDOP, apogee)
+
+“Mark Event” button that injects a tagged row into the log
+
+Home position + range/bearing readout
+
+KML/GPX export
+
+🤝 Contributing
+
+Issues and PRs welcome! If you add sensors/fields, just:
+
+Append to the CSV header in the transmitter.
+
+The Ground Station will auto-adopt the new header and show fields automatically.
+
+📄 License
+
+MIT (or your preferred license). Add your notice here.
+
+🙏 Credits
+
+Adafruit BMP280 / MPU6050 / GFX / SSD1306
+
+Mikal Hart’s TinyGPS++
+
+Leaflet for maps
+
+ASCII Overview
+[ESP32 Transmitter]
+  BMP280 + MPU6050 + GPS  --> CSV @ 1Hz --> USB/UART
+  SD logging (optional)    <-- commands  <-- Ground Station
+
+     | (radio/cable)
+     v
+
+[ESP32 Receiver + OLED]
+  UART1 (RX=16, TX=17)  <--> USB Serial (to PC)
+  OLED shows scrolling received text
+
+     |
+     v
+
+[Ground Station (Chrome/Edge)]
+  Web Serial <---> Receiver USB
+  - Raw stream     - Parsed table      - Live map (Leaflet)
+  - Control buttons: Arm, Disarm, Reset Time, Log ON/OFF, New File,
+                     Fire Servo, Set Servo Angle, Buzzer ON/OFF
+  - Event log (#ACK/#ERR)
