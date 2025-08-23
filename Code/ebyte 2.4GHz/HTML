@@ -9,6 +9,10 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
 
 <style>
+  /* ===== Layout safety: never overflow horizontally ===== */
+  * { box-sizing: border-box; }
+  html, body { height:100%; overflow-x:hidden; }
+
   /* ===== Rocket Controller Theme (dark + neon) ===== */
   :root{
     --bg:#0b0f1a; --panel:#101626; --panel2:#0f1424; --edge:#1b2440;
@@ -16,13 +20,13 @@
     --danger:#ff4d6d; --warn:#ffb703; --good:#21d07a;
     --grid:linear-gradient(rgba(48,165,255,.08) 1px, transparent 1px),linear-gradient(90deg, rgba(48,165,255,.08) 1px, transparent 1px);
   }
-  html,body{height:100%}
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
     letter-spacing:.2px;
   }
-  .wrap{max-width:1300px; margin:0 auto; padding:18px;}
+  .wrap{ width:min(1200px, 100% - 24px); margin:0 auto; padding:18px; }
+
   .titlebar{
     display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;
   }
@@ -36,7 +40,7 @@
     box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
   }
   .btn:disabled{opacity:.45; cursor:not-allowed}
-  .btn.primary{border-color: #2fb591; background:linear-gradient(180deg, #0d2f2a, #0b2622); color:#dffef4}
+  .btn.primary{border-color:#2fb591; background:linear-gradient(180deg, #0d2f2a, #0b2622); color:#dffef4}
   .btn.warn{border-color:#8a5a00; background:linear-gradient(180deg,#2a1e00,#201700)}
   .btn.sm{padding:6px 10px; font-size:13px; border-radius:8px}
   .select, .input{
@@ -44,11 +48,23 @@
   }
   .input.sm{padding:6px 8px; font-size:13px; border-radius:8px}
 
-  .grid{display:grid; grid-template-columns:320px 1fr; gap:16px;}
+  /* ===== Responsive grid: left column clamped, right fills ===== */
+  .grid{
+    display:grid;
+    grid-template-columns: clamp(260px, 24vw, 360px) 1fr;
+    gap:16px;
+    width:100%;
+  }
+  @media (max-width: 1100px){
+    .grid{ grid-template-columns: 1fr; }
+    #map{ height:360px; }
+  }
+
   .card{
     background:linear-gradient(var(--panel), var(--panel2));
     border:1px solid var(--edge); border-radius:14px; padding:12px;
     box-shadow:0 10px 30px rgba(0,0,0,.25);
+    max-width:100%;
   }
   .card h2{margin:0 0 8px; font-size:14px; color:#d6e3ff; letter-spacing:.4px; text-transform:uppercase}
 
@@ -56,34 +72,39 @@
   .controls .row{
     display:grid; grid-template-columns: 1fr auto auto; gap:6px; align-items:center;
     padding:8px; border-radius:10px; border:1px solid #1a2442; background:#0c1324;
+    max-width:100%;
   }
   .controls .row + .row{margin-top:6px}
   .label{font-weight:600; font-size:13px;}
   .status{
     font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
     padding:3px 8px; border-radius:999px; border:1px solid #2a3a64; background:#0d1426; color:#cfe2ff;
-    min-width:96px; text-align:center; white-space:nowrap;
+    min-width:96px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   .status.good{color:#dffef4; border-color:#178e69; background:#0d2f2a}
   .status.warn{color:#ffe7b3; border-color:#8a5a00; background:#2a1e00}
   .status.bad{ color:#ffd6de; border-color:#8e1b32; background:#2a0d17}
 
   /* telemetry strip */
-  .strip{display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; margin-bottom:12px;}
-  .tile{background:#0d1426; border:1px solid #1a2442; border-radius:12px; padding:8px;}
+  .strip{display:grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap:8px; margin-bottom:12px; width:100%;}
+  .tile{background:#0d1426; border:1px solid #1a2442; border-radius:12px; padding:8px; min-width:0;}
   .tile .k{font-size:10px; color:#8aa1c9; text-transform:uppercase; letter-spacing:.6px}
-  .tile .v{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:15px; margin-top:3px; color:#d6f0ff}
+  .tile .v{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:15px; margin-top:3px; color:#d6f0ff; overflow:hidden; text-overflow:ellipsis}
 
-  #map{height:420px; border:1px solid #1a2442; border-radius:12px; overflow:hidden}
+  /* Map + Raw + Table must never overflow */
+  #map{ height:420px; width:100%; max-width:100%; border:1px solid #1a2442; border-radius:12px; overflow:hidden }
+  .leaflet-container{ width:100% !important; }
   #raw{
     height:180px; background:#050912; color:#b8cae9; border:1px solid #1a2442;
     border-radius:12px; padding:8px; overflow:auto; white-space:pre-wrap; font-family:ui-monospace,Menlo,Consolas,monospace;
+    max-width:100%;
   }
-  table{width:100%; border-collapse:collapse; font-size:13px;}
-  th, td{padding:8px 10px; border-bottom:1px solid #1a2442;}
-  th{color:#9bb0d0; text-align:left; position:sticky; top:0; background:#0f1528}
+  table{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:13px; }
+  th, td{ padding:8px 10px; border-bottom:1px solid #1a2442; overflow-wrap:anywhere; }
+  th{ color:#9bb0d0; text-align:left; position:sticky; top:0; background:#0f1528 }
+  th:first-child{ width:55%; } td:first-child{ overflow:hidden; text-overflow:ellipsis; }
 
-  .bggrid{ background-image:var(--grid); background-size:24px 24px; background-position:0 0; border-radius:14px; padding:8px;}
+  .bggrid{ background-image:var(--grid); background-size:24px 24px; background-position:0 0; border-radius:14px; padding:8px; max-width:100%; }
 </style>
 </head>
 <body>
@@ -329,26 +350,27 @@
   const map = L.map('map',{zoomControl:true}).setView([0,0],2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
   let marker=null, path=L.polyline([], {weight:3, opacity:.9, color:"#30a5ff"}).addTo(map), firstFix=false;
+  function invalidateMap(){ try{ map.invalidateSize(); }catch(e){} }
+  window.addEventListener('resize', invalidateMap);
 
   function validLatLon(lat,lon){ return isFinite(lat)&&isFinite(lon)&&lat>=-90&&lat<=90&&lon>=-180&&lon<=180 && !(lat===0&&lon===0); }
   function updateMapFromValues(vals){
-    const latIdx=headers.indexOf("Latitude_deg"); const li=(latIdx>=0)?latIdx:16;
-    const lonIdx=headers.indexOf("Longitude_deg");const lo=(lonIdx>=0)?lonIdx:17;
-    const satIdx=headers.indexOf("Satellites");   const si=(satIdx>=0)?satIdx:21;
-    const lat=parseFloat(vals[li]); const lon=parseFloat(vals[lo]); const sats=parseInt(vals[si]||'0',10);
+    const li=headers.indexOf("Latitude_deg");  const lat=parseFloat(vals[(li>=0)?li:16]);
+    const lo=headers.indexOf("Longitude_deg"); const lon=parseFloat(vals[(lo>=0)?lo:17]);
+    const si=headers.indexOf("Satellites");    const sats=parseInt(vals[(si>=0)?si:21]||'0',10);
     if(validLatLon(lat,lon)){
       badge(fixPill, `${lat.toFixed(6)}, ${lon.toFixed(6)} (sats:${isFinite(sats)?sats:'?'})`, "good");
       const ll=[lat,lon];
       if(!marker){ marker=L.marker(ll).addTo(map).bindPopup('Receiver'); } else { marker.setLatLng(ll); }
       path.addLatLng(ll); if(!firstFix){ firstFix=true; map.setView(ll,16); }
+      invalidateMap();
     } else {
       badge(fixPill, `no fix`, "warn");
     }
   }
 
-  /* ===== Dashboard update from latest values ===== */
+  /* ===== Dashboard from latest values ===== */
   function updateDashboard(){
-    // strip
     const alt  = getNum("Altitude_m");         t_alt.textContent  = isFinite(alt)? alt.toFixed(1)+" m":"—";
     const vspd = getNum("VerticalSpeed_mps");  t_vspd.textContent = isFinite(vspd)? vspd.toFixed(2)+" m/s":"—";
     const sog  = getNum("SpeedOverGround_mps");t_sog.textContent  = isFinite(sog)? sog.toFixed(2)+" m/s":"—";
@@ -357,7 +379,6 @@
     const batt = getNum("BatteryPercent");     t_batt.textContent = isFinite(batt)? batt.toFixed(0)+"% ("+ (getNum("Voltage_V")||0).toFixed(2)+"V )" : "—";
     const pkt  = get("PacketCount");           t_pkt.textContent  = pkt || "—";
 
-    // badges
     const status = (get("Status")||"").toUpperCase();
     if (status==="ARMED")      badge(statusBadge, "Armed", "good");
     else if (status==="FIRED") badge(statusBadge, "Fired", "bad");
@@ -421,6 +442,7 @@
 
       connectBtn.disabled = true; disconnectBtn.disabled = false; enableControls(true); setOnline(true);
       linesShown=0; lineCountEl.textContent='';
+      setTimeout(() => map.invalidateSize(), 200); // ensure correct map width after connect
 
       while(true){
         const {value, done} = await reader.read();
@@ -466,25 +488,22 @@
   }
 
   /* ===== Wire buttons ===== */
-  connectBtn.addEventListener('click', connect);
-  disconnectBtn.addEventListener('click', disconnect);
-
-  btnArm.addEventListener('click',       ()=> sendLine("CMD:ARM"));
-  btnDisarm.addEventListener('click',    ()=> sendLine("CMD:DISARM"));
-  btnResetTime.addEventListener('click', ()=> sendLine("CMD:RESET_TIME"));
-
-  btnLogOn.addEventListener('click',     ()=> sendLine("CMD:LOG_ON"));
-  btnLogOff.addEventListener('click',    ()=> sendLine("CMD_LOG_OFF")); // fallback if you renamed, keep old:
-  btnLogOff.addEventListener('click',    ()=> sendLine("CMD:LOG_OFF"));
-  btnNewFile.addEventListener('click',   ()=> sendLine("CMD:NEW_FILE"));
-
-  btnFireServo.addEventListener('click', ()=> sendLine("CMD:FIRE_SERVO"));
-  btnSetAngle.addEventListener('click',  ()=>{
-    const a = Math.max(0, Math.min(180, parseInt(servoAngle.value||"90",10)));
+  document.getElementById('btnArm').addEventListener('click',       ()=> sendLine("CMD:ARM"));
+  document.getElementById('btnDisarm').addEventListener('click',    ()=> sendLine("CMD:DISARM"));
+  document.getElementById('btnResetTime').addEventListener('click', ()=> sendLine("CMD:RESET_TIME"));
+  document.getElementById('btnLogOn').addEventListener('click',     ()=> sendLine("CMD:LOG_ON"));
+  document.getElementById('btnLogOff').addEventListener('click',    ()=> sendLine("CMD:LOG_OFF"));
+  document.getElementById('btnNewFile').addEventListener('click',   ()=> sendLine("CMD:NEW_FILE"));
+  document.getElementById('btnFireServo').addEventListener('click', ()=> sendLine("CMD:FIRE_SERVO"));
+  document.getElementById('btnSetAngle').addEventListener('click',  ()=>{
+    const a = Math.max(0, Math.min(180, parseInt(document.getElementById('servoAngle').value||"90",10)));
     sendLine("CMD:SET_SERVO:" + a);
   });
-  btnBuzzerOn.addEventListener('click',  ()=> sendLine("CMD:BUZZER_ON"));
-  btnBuzzerOff.addEventListener('click', ()=> sendLine("CMD:BUZZER_OFF"));
+  document.getElementById('btnBuzzerOn').addEventListener('click',  ()=> sendLine("CMD:BUZZER_ON"));
+  document.getElementById('btnBuzzerOff').addEventListener('click', ()=> sendLine("CMD:BUZZER_OFF"));
+
+  connectBtn.addEventListener('click', connect);
+  disconnectBtn.addEventListener('click', disconnect);
 })();
 </script>
 </body>
