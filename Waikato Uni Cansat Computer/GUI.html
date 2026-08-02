@@ -162,6 +162,19 @@
         <div class="gps-row"><span class="k">Last packet</span><span id="v_age">--</span></div>
       </div>
       <div class="panel">
+        <h3>Servo Control</h3>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px">
+          <input type="range" id="servoSlider" min="0" max="180" value="90" style="flex:1" disabled>
+          <span id="servoVal" style="font-family:var(--mono);font-size:20px;color:var(--accent);min-width:44px;text-align:right">90°</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="secondary" id="servo0" disabled>0°</button>
+          <button class="secondary" id="servo90" disabled>Centre</button>
+          <button class="secondary" id="servo180" disabled>180°</button>
+        </div>
+        <div class="hint" style="margin-top:8px">Sent to the rocket on the next telemetry ack.</div>
+      </div>
+      <div class="panel">
         <h3>Serial Log</h3>
         <div id="log"></div>
       </div>
@@ -171,7 +184,7 @@
 
 <script>
 // ---------- Web Serial ----------
-let port, reader, keepReading = false;
+let port, reader, writer, keepReading = false;
 let textBuf = "";
 const csvRows = [];           // stored parsed rows for download
 let pktCount = 0;
@@ -200,9 +213,11 @@ $('connectBtn').addEventListener('click', async () => {
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
     keepReading = true;
     setStatus('live','Connected');
     $('connectBtn').textContent = 'Disconnect';
+    setServoEnabled(true);
     readLoop();
   } catch(e){ log('# '+e.message, true); port=null; }
 });
@@ -210,11 +225,39 @@ $('connectBtn').addEventListener('click', async () => {
 async function disconnect(){
   keepReading = false;
   try { if(reader){ await reader.cancel(); reader.releaseLock(); } } catch(e){}
+  try { if(writer){ writer.releaseLock(); } } catch(e){}
   try { if(port){ await port.close(); } } catch(e){}
-  port=null; reader=null;
+  port=null; reader=null; writer=null;
   setStatus('','Disconnected');
   $('connectBtn').textContent = 'Connect';
+  setServoEnabled(false);
 }
+
+// ---------- Servo control ----------
+const enc = new TextEncoder();
+let servoSendTimer = null;
+async function sendServo(angle){
+  if(!writer) return;
+  try { await writer.write(enc.encode('S:'+angle+'\n')); }
+  catch(e){ log('# servo send error: '+e.message, true); }
+}
+function setServoEnabled(on){
+  ['servoSlider','servo0','servo90','servo180'].forEach(id=> $(id).disabled = !on);
+}
+function setServo(angle){
+  angle = Math.max(0, Math.min(180, angle|0));
+  $('servoSlider').value = angle;
+  $('servoVal').textContent = angle+'°';
+  // throttle: send at most ~every 60ms while dragging
+  if(servoSendTimer) return;
+  servoSendTimer = setTimeout(()=>{ servoSendTimer=null; }, 60);
+  sendServo(angle);
+}
+$('servoSlider').addEventListener('input', e=> setServo(+e.target.value));
+$('servoSlider').addEventListener('change', e=> sendServo(+e.target.value)); // final value
+$('servo0').addEventListener('click', ()=> setServo(0));
+$('servo90').addEventListener('click', ()=> setServo(90));
+$('servo180').addEventListener('click', ()=> setServo(180));
 
 function setStatus(cls,txt){
   dot.className = 'dot' + (cls?(' '+cls):'');
