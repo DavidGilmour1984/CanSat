@@ -171,6 +171,9 @@ The flight-computer sketches use these libraries. Install each via
 | GPS parsing | TinyGPSPlus | Mikal Hart |
 | Radio (NRF24) | RF24 | TMRh20 |
 
+The servo does **not** need the Servo library — the firmware drives it directly
+with the STM32 `HardwareTimer` on pin PB8, which is included in the core.
+
 A note on pin names: STM32duino uses the chip's pin names, not Arduino numbers.
 So to control the LED you write `digitalWrite(PC13, HIGH);`, not
 `digitalWrite(13, HIGH);`.
