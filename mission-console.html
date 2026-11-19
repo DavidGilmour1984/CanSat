@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Altimeter Mission Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+  /* St Peter's palette: crimson, ink, stone, white */
+  :root{
+    --bg:#eceef1; --panel:#ffffff; --text:#1c1f26; --muted:#4a5060;
+    --line:#c9cdd4; --ink:#1c1f26;
+    --red:#9b1b30; --red-dark:#741424; --red-tint:#f6e7ea;
+    --serif:Georgia,"Times New Roman",serif;
+    --sans:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:500 18px/1.45 var(--sans)}
+  .wrap{max-width:1400px;margin:auto;padding:20px}
+  h1{margin:0 0 14px;font:700 32px/1.15 var(--serif);color:var(--ink)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+  .card.masthead{border-top:8px solid var(--red);box-shadow:inset 0 3px 0 #fff, inset 0 5px 0 var(--red)}
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+
+  button{
+    border:2px solid var(--ink);background:#fff;color:var(--ink);padding:11px 18px;border-radius:8px;
+    cursor:pointer;font:700 18px var(--sans);min-height:50px
+  }
+  button:hover{background:#f1f2f4}
+  button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--red);outline-offset:2px}
+  button.primary{background:var(--red);border-color:var(--red);color:#fff}
+  button.primary:hover{background:var(--red-dark);border-color:var(--red-dark)}
+  button.secondary{background:#fff;color:var(--ink)}
+  button.danger{background:#fff;border-color:var(--red-dark);color:var(--red-dark)}
+  button.danger:hover{background:var(--red-dark);color:#fff}
+  button:disabled,button:disabled:hover{background:#e3e5e9;border-color:#a3a8b2;color:#5b616d;cursor:not-allowed}
+  input, select{
+    background:#fff;border:2px solid var(--ink);border-radius:8px;color:var(--ink);padding:10px 12px;
+    font:600 18px var(--sans);min-height:50px
+  }
+  input::placeholder{color:#6b7180}
+  input.aborted{color:#8a3b0a;border-color:#b45309;background:#fdf1e3}
+  .pill{padding:7px 14px;border-radius:999px;background:#fff;border:2px solid var(--line);color:var(--ink);font-weight:700;font-size:17px}
+  .pill.ok{background:#e6f2ea;border-color:#2f6b45;color:#1f4a30}
+  .pill.warn{background:#fdf1e3;border-color:#b45309;color:#7a3507}
+  .pill.bad{background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
+  .panel-title{font:700 19px var(--serif);color:var(--ink)}
+
+  .grid{display:grid;grid-template-columns:1.6fr 0.9fr;gap:16px}
+  @media (max-width:1000px){ .grid{grid-template-columns:1fr} }
+
+  #chartWrap{height:500px;border-radius:10px;border:1px solid var(--line);background:#fff;padding:10px}
+  #chart{width:100%;height:100%}
+
+  .tableCard{border:1px solid var(--line);border-left:6px solid var(--red);border-radius:10px;padding:16px;background:#fff}
+  .tableCard h3{margin:0 0 8px;font:700 24px var(--serif);color:var(--ink)}
+  table{width:100%;border-collapse:collapse}
+  td{padding:10px 6px;border-bottom:1px solid #dfe2e7}
+  td.label{color:var(--muted);font-weight:600;text-align:left}
+  td.value{color:var(--ink);font-weight:800;font-size:22px;text-align:right;font-variant-numeric:tabular-nums}
+
+  textarea{width:100%;height:220px;border-radius:8px;border:1px solid var(--line);background:#fafbfc;color:var(--ink);
+    font:500 15px ui-monospace,Consolas,monospace;padding:10px}
+
+  .mem{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .bar{flex:1;height:18px;background:#e3e5e9;border-radius:999px;overflow:hidden}
+  .bar > span{display:block;height:100%;background:var(--red);width:0%}
+  .mem small{color:var(--muted);font-weight:700;font-size:16px;font-variant-numeric:tabular-nums}
+
+  .download-bar{display:none;margin-top:12px;align-items:center;gap:12px}
+  .download-track{flex:1;height:18px;background:#e3e5e9;border-radius:999px;overflow:hidden}
+  .download-fill{display:block;height:100%;background:var(--red);width:0%}
+  .download-label{color:var(--muted);min-width:200px;text-align:right;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+
+  .credit{text-align:right;color:#9aa0ab;font-size:12px;padding:4px 4px 12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card masthead">
+    <h1>Altimeter Mission Console</h1>
+    <div class="row">
+      <button id="btnConnect" class="primary">Connect</button>
+
+      <div class="mem" style="min-width:360px;flex:1">
+        <span class="panel-title">Flash usage</span>
+        <div class="bar"><span id="memFill"></span></div>
+        <small id="memLabel">0 / 1.00 MB (0%)</small>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="pill" id="devStatus">Not connected</span>
+      <span class="pill" id="msg">Ready</span>
+      <span class="pill" id="readout">LED readout: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+
+    <!-- Top controls with inline flight nav -->
+    <div class="row" style="margin-bottom:12px;gap:12px;align-items:center;">
+      <button id="btnGet" class="primary">Download Data from Altimeter</button>
+
+      <div class="flight-nav" style="display:flex;align-items:center;gap:10px;">
+        <button id="prevFlight" class="secondary">◀</button>
+        <input id="flightDisplay" readonly style="min-width:240px;text-align:center" />
+        <button id="nextFlight" class="secondary">▶</button>
+        <input id="flightName" placeholder="Flight Name (optional)" style="min-width:200px" />
+      </div>
+
+      <button id="btnSaveXlsx" class="secondary">Save XLSX</button>
+      <button id="btnSavePdf" class="secondary">Save PDF</button>
+      <button id="btnReadout" class="secondary">Replay LED Readout</button>
+      <button id="btnClear" class="danger">Erase Altimeter Data</button>
+    </div>
+
+    <!-- Download progress bar -->
+    <div class="download-bar" id="downloadBar">
+      <div class="download-track"><span class="download-fill" id="downloadFill"></span></div>
+      <div class="download-label" id="downloadLabel">0% (0 / 0 KB)</div>
+    </div>
+
+    <!-- Chart + Metrics -->
+    <div class="grid" id="exportRegion">
+      <div id="chartWrap"><canvas id="chart"></canvas></div>
+      <div class="tableCard" id="metrics">
+        <h3>Flight Metrics</h3>
+        <table>
+          <tr><td class="label">Time of flight</td><td class="value" id="m_flightTime">—</td></tr>
+          <tr><td class="label">Apogee</td><td class="value" id="m_apogee">—</td></tr>
+          <tr><td class="label">Time to apogee</td><td class="value" id="m_timeToApogee">—</td></tr>
+          <tr><td class="label">Descent time</td><td class="value" id="m_descentTime">—</td></tr>
+          <tr><td class="label">Avg ascent speed</td><td class="value" id="m_avgAsc">—</td></tr>
+          <tr><td class="label">Peak ascent speed</td><td class="value" id="m_maxAsc">—</td></tr>
+          <tr><td class="label">Avg descent speed</td><td class="value" id="m_avgDesc">—</td></tr>
+          <tr><td class="label">Peak descent speed</td><td class="value" id="m_maxDesc">—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Raw CSV block -->
+  <div class="card">
+    <div class="panel-title" style="margin-bottom:8px">
+      Raw CSV (between [BEGIN_CSV] and [END_CSV])
+    </div>
+    <textarea id="log" placeholder="CSV output appears here after DUMP…"></textarea>
+  </div>
+
+  <!-- Serial monitor -->
+  <div class="card">
+    <div class="panel-title" style="margin-bottom:8px">Serial monitor (non-CSV traffic)</div>
+    <textarea id="monitor" readonly style="height:140px" placeholder="Device messages appear here…"></textarea>
+  </div>
+
+  <div class="credit">Yaris</div>
+</div>
+
+
+<script>
+let port, reader, writer;
+let keepReading = false;
+let textDecoder, readableStreamClosed;
+
+let flights = [];
+let currentFlight = null;
+let currentIndex = 0;
+
+let bytesUsed = 0;
+let fsTotalBytes = 1024 * 1024;
+let downloadTotal = 0;
+let downloadReceived = 0;
+
+// UI refs
+const els = {
+  flightDisplay: document.getElementById('flightDisplay'),
+  prevFlight: document.getElementById('prevFlight'),
+  nextFlight: document.getElementById('nextFlight'),
+  flightName:  document.getElementById('flightName'),
+  connect:    document.getElementById('btnConnect'),
+  get:        document.getElementById('btnGet'),
+  clear:      document.getElementById('btnClear'),
+  readoutBtn: document.getElementById('btnReadout'),
+  readout:    document.getElementById('readout'),
+  saveXlsx:   document.getElementById('btnSaveXlsx'),
+  savePdf:    document.getElementById('btnSavePdf'),
+  chartCanvas:document.getElementById('chart'),
+  txt:        document.getElementById('log'),
+  m_flightTime: document.getElementById('m_flightTime'),
+  m_apogee:     document.getElementById('m_apogee'),
+  m_timeToApogee: document.getElementById('m_timeToApogee'),
+  m_descentTime: document.getElementById('m_descentTime'),
+  m_avgAsc:    document.getElementById('m_avgAsc'),
+  m_maxAsc:    document.getElementById('m_maxAsc'),
+  m_avgDesc:   document.getElementById('m_avgDesc'),
+  m_maxDesc:   document.getElementById('m_maxDesc'),
+  memFill:    document.getElementById('memFill'),
+  memLabel:   document.getElementById('memLabel'),
+  exportRegion:document.getElementById('exportRegion'),
+  downloadBar:  document.getElementById('downloadBar'),
+  downloadFill: document.getElementById('downloadFill'),
+  downloadLabel:document.getElementById('downloadLabel'),
+  devStatus:  document.getElementById('devStatus'),
+  msg:        document.getElementById('msg'),
+  monitor:    document.getElementById('monitor')
+};
+
+// ------------- Status / monitor helpers -------------
+function setPill(el, text, cls) {
+  el.textContent = text;
+  el.className = 'pill' + (cls ? ' ' + cls : '');
+}
+function showMsg(text, cls) { setPill(els.msg, text, cls); }
+function logMonitor(line) {
+  const stamp = new Date().toLocaleTimeString();
+  els.monitor.value += `[${stamp}] ${line}\n`;
+  if (els.monitor.value.length > 20000) els.monitor.value = els.monitor.value.slice(-15000);
+  els.monitor.scrollTop = els.monitor.scrollHeight;
+}
+
+// ------------- Chart (St Peter's colours) -------------
+const LINE_COLOUR = '#9b1b30';
+const ABORTED_COLOUR = '#b45309';
+const ctx = els.chartCanvas.getContext('2d');
+const chartLibOK = (typeof Chart !== 'undefined');
+if (!chartLibOK) {
+  setTimeout(()=>showMsg('Chart library failed to load. An internet connection is required for charts and exports.', 'bad'), 0);
+}
+const chart = !chartLibOK ? null : new Chart(ctx, {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Altitude (m)',
+    data: [],
+    borderWidth: 3,
+    pointRadius: 0,
+    tension: 0,
+    borderColor: LINE_COLOUR
+  }]},
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    scales: {
+      x: {
+        title: { display:true, text:'Time (s)', color:'#1c1f26', font:{ size:18, weight:'bold', family:'Georgia' } },
+        ticks: { color:'#4a5060', font:{ size:15, weight:'bold', family:'Helvetica' } },
+        grid: { color:'#e1e4e8', lineWidth:1 },
+        border: { color:'#1c1f26', width:2 }
+      },
+      y: {
+        title: { display:true, text:'Altitude (m)', color:'#1c1f26', font:{ size:18, weight:'bold', family:'Georgia' } },
+        ticks: { color:'#4a5060', font:{ size:15, weight:'bold', family:'Helvetica' } },
+        grid: { color:'#e1e4e8', lineWidth:1 },
+        border: { color:'#1c1f26', width:2 }
+      }
+    },
+    plugins: { legend:{ labels:{ color:'#1c1f26', font:{ size:16, weight:'bold', family:'Helvetica' } } } }
+  }
+});
+
+// ------------- Memory gauge -------------
+function updateMemoryUI() {
+  const total = fsTotalBytes > 0 ? fsTotalBytes : 1;
+  const used = Math.max(0, bytesUsed);
+  const pct  = fsTotalBytes > 0 ? Math.min(100, (used / total) * 100) : 0;
+  els.memFill.style.width = pct.toFixed(1) + '%';
+  els.memLabel.textContent = `${(used/1048576).toFixed(2)} / ${(fsTotalBytes/1048576).toFixed(2)} MB (${pct.toFixed(1)}%)`;
+}
+
+// ------------- Download progress helpers -------------
+function startDownload(totalBytes) {
+  downloadTotal = totalBytes;
+  downloadReceived = 0;
+  els.downloadBar.style.display = 'flex';
+  updateDownloadUI();
+}
+function updateDownload(receivedChunk) {
+  downloadReceived += receivedChunk.length;
+  updateDownloadUI();
+}
+function finishDownload() {
+  els.downloadBar.style.display = 'none';
+}
+function updateDownloadUI() {
+  const pct = downloadTotal > 0 ? (downloadReceived / downloadTotal) * 100 : 0;
+  els.downloadFill.style.width = pct.toFixed(1) + '%';
+  els.downloadLabel.textContent =
+    `${pct.toFixed(1)}% (${(downloadReceived/1024).toFixed(1)} / ${(downloadTotal/1024).toFixed(1)} KB)`;
+}
+
+// ------------- Helpers -------------
+function setConnectedUI(connected) {
+  els.connect.disabled = connected;
+  els.get.disabled = !connected;
+  els.clear.disabled = !connected;
+  els.readoutBtn.disabled = !connected;
+  els.saveXlsx.disabled = false;
+  els.savePdf.disabled  = false;
+}
+
+function flightLabel(f) {
+  return `Flight ${f.id}${f.aborted ? ' (aborted)' : ''}`;
+}
+
+function fmtS(x){return isFinite(x)? `${x.toFixed(2)} s` : '—';}
+function fmtM(x){return isFinite(x)? `${x.toFixed(2)} m` : '—';}
+function fmtV(x){return isFinite(x)? `${x.toFixed(2)} m/s` : '—';}
+
+// ------------- Metrics using 2 m threshold -------------
+const THRESH=2.0; // meters
+function updateMetricsFromSlice(times, alts){
+  if (!times.length){ setMetrics(null); return; }
+
+  const startIdx = alts.findIndex(a=>a>THRESH);
+  let endIdx = -1; for(let i=alts.length-1;i>=0;i--){ if (alts[i]>THRESH){ endIdx=i; break; } }
+
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx){
+    setMetrics(null); return;
+  }
+
+  const T = times.slice(startIdx, endIdx+1);
+  const A = alts.slice(startIdx, endIdx+1);
+
+  let maxAlt = -Infinity, k=0;
+  for (let i=0;i<A.length;i++){ if (A[i]>maxAlt){ maxAlt=A[i]; k=i; } }
+
+  const tLaunch = T[0], aLaunch=A[0];
+  const tAp     = T[k], aAp   =A[k];
+  const tLand   = T[T.length-1], aLand=A[A.length-1];
+
+  const flightTime   = Math.max(0, tLand - tLaunch);
+  const timeToApogee = Math.max(0, tAp   - tLaunch);
+  const descentTime  = Math.max(0, tLand - tAp);
+
+  const avgAsc = (tAp>tLaunch) ? (aAp - aLaunch)/(tAp - tLaunch) : NaN;
+  let maxAsc = -Infinity;
+  for (let i=1;i<=k;i++){
+    const dt=T[i]-T[i-1]; if (dt<=0) continue;
+    const v=(A[i]-A[i-1])/dt;
+    if (v>maxAsc) maxAsc=v;
+  }
+  if (maxAsc===-Infinity) maxAsc = NaN;
+
+  const avgDesc = (tLand>tAp) ? (aAp - aLand)/(tLand - tAp) : NaN;
+  let maxDesc = -Infinity;
+  for (let i=k+1;i<T.length;i++){
+    const dt=T[i]-T[i-1]; if (dt<=0) continue;
+    const v=(A[i]-A[i-1])/dt;
+    const mag=-v;
+    if (mag>maxDesc) maxDesc=mag;
+  }
+  if (maxDesc===-Infinity) maxDesc = NaN;
+
+  setMetrics({
+    flightTime, apogee:maxAlt, timeToApogee, descentTime,
+    avgAsc, maxAsc, avgDesc, maxDesc
+  });
+}
+
+function setMetrics(m){
+  els.m_flightTime.textContent   = m?fmtS(m.flightTime):'—';
+  els.m_apogee.textContent       = m?fmtM(m.apogee):'—';
+  els.m_timeToApogee.textContent = m?fmtS(m.timeToApogee):'—';
+  els.m_descentTime.textContent  = m?fmtS(m.descentTime):'—';
+  els.m_avgAsc.textContent       = m?fmtV(m.avgAsc):'—';
+  els.m_maxAsc.textContent       = m?fmtV(m.maxAsc):'—';
+  els.m_avgDesc.textContent      = m?fmtV(m.avgDesc):'—';
+  els.m_maxDesc.textContent      = m?fmtV(m.maxDesc):'—';
+}
+
+
+// ------------- CSV -> flights -------------
+function parseCSV(csv){
+  flights=[]; currentFlight=null;
+  const lines = csv.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const hasMarkers = lines.some(l=>l.startsWith('FLIGHT,'));
+
+  if (!hasMarkers){
+    const f0={id:0,times:[],alts:[],aborted:false};
+    for (let line of lines){
+      if (line.toLowerCase().includes('time') && line.includes('alt')) continue;
+      const p=line.split(','); if (p.length<2) continue;
+      const t=parseFloat(p[0]), a=parseFloat(p[1]);
+      if (Number.isFinite(t)&&Number.isFinite(a)){ f0.times.push(t); f0.alts.push(a); }
+    }
+    if (f0.times.length) flights.push(f0);
+  } else {
+    for (let line of lines){
+      if (line.startsWith('FLIGHT,')){
+        const n=parseInt(line.split(',')[1]);
+        currentFlight={id:n,times:[],alts:[],aborted:false};
+        flights.push(currentFlight);
+        continue;
+      }
+      if (line === 'ABORTED'){
+        if (currentFlight) currentFlight.aborted = true;
+        continue;
+      }
+      if (line.toLowerCase().includes('time') && line.includes('alt')) continue;
+      const p=line.split(','); if (p.length<2 || !currentFlight) continue;
+      const t=parseFloat(p[0]), a=parseFloat(p[1]);
+      if (Number.isFinite(t)&&Number.isFinite(a)){ currentFlight.times.push(t); currentFlight.alts.push(a); }
+    }
+  }
+
+  for (const f of flights) {
+    logMonitor(`${flightLabel(f)}: ${f.times.length} samples`);
+  }
+
+  if (flights.length) {
+    // Most recent non-aborted flight with data; then any flight with data; then the last
+    let idx = -1;
+    for (let i = flights.length - 1; i >= 0 && idx < 0; i--) {
+      if (!flights[i].aborted && flights[i].times.length) idx = i;
+    }
+    for (let i = flights.length - 1; i >= 0 && idx < 0; i--) {
+      if (flights[i].times.length) idx = i;
+    }
+    if (idx < 0) idx = flights.length - 1;
+    currentIndex = idx;
+    showFlight(currentIndex);
+  }
+}
+
+
+els.prevFlight.addEventListener("click", () => {
+  if (flights.length > 0) {
+    currentIndex = (currentIndex - 1 + flights.length) % flights.length;
+    showFlight(currentIndex);
+  }
+});
+
+els.nextFlight.addEventListener("click", () => {
+  if (flights.length > 0) {
+    currentIndex = (currentIndex + 1) % flights.length;
+    showFlight(currentIndex);
+  }
+});
+// ------------- Keyboard navigation -------------
+document.addEventListener("keydown", (e) => {
+  if (flights.length === 0) return;
+  if (e.target === els.flightName) return;
+  if (e.key === "ArrowLeft") {
+    currentIndex = (currentIndex - 1 + flights.length) % flights.length;
+    showFlight(currentIndex);
+  }
+  if (e.key === "ArrowRight") {
+    currentIndex = (currentIndex + 1) % flights.length;
+    showFlight(currentIndex);
+  }
+});
+
+
+function showFlight(index) {
+  if (index < 0 || index >= flights.length) return;
+  currentFlight = flights[index];
+  els.flightDisplay.value = flightLabel(currentFlight);
+  els.flightDisplay.classList.toggle('aborted', !!currentFlight.aborted);
+  if (chart) {
+    chart.data.labels = currentFlight.times.slice();
+    chart.data.datasets[0].data = currentFlight.alts.slice();
+    chart.data.datasets[0].borderColor = currentFlight.aborted ? ABORTED_COLOUR : LINE_COLOUR;
+    chart.update();
+  }
+  updateMetricsFromSlice(currentFlight.times, currentFlight.alts);
+}
+
+
+
+// ------------- Web Serial -------------
+async function connect(){
+  try{
+    port = await navigator.serial.requestPort({});
+    await port.open({ baudRate:115200 });
+    writer = port.writable.getWriter();
+    textDecoder=new TextDecoderStream();
+    readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+    keepReading=true; lineBuf=''; collecting=false; readLoop();
+    setConnectedUI(true);
+    setPill(els.devStatus, 'Connected', 'ok');
+    logMonitor('Port opened at 115200 baud');
+
+    // Handshake: wait for a STATUS reply before downloading. The altimeter
+    // may still be starting up (scanning flash) when the port opens.
+    let gotStatus = false;
+    for (let attempt = 0; attempt < 4 && !gotStatus; attempt++) {
+      statusSeen = false;
+      await sendLine('STATUS');
+      gotStatus = await waitFor(()=>statusSeen, 2500);
+    }
+    if (!gotStatus) logMonitor('No STATUS reply – requesting data anyway');
+    requestDump();
+  }catch(e){
+    showMsg('Failed to connect: ' + e, 'bad');
+    logMonitor('Connect error: ' + e);
+  }
+}
+async function disconnect(){
+  try{
+    keepReading=false;
+    if (reader){ await reader.cancel(); await readableStreamClosed.catch(()=>{}); reader=null; }
+    if (writer){ writer.releaseLock(); writer=null; }
+    if (port){ await port.close(); port=null; }
+  }finally{
+    setConnectedUI(false);
+    setPill(els.devStatus, 'Not connected', '');
+  }
+}
+
+// ------------- Line-based serial parser -------------
+let lineBuf = '';
+let collecting = false;
+let csvLines = [];
+let linesSinceUI = 0;
+
+async function readLoop(){
+  try{
+    while(keepReading){
+      const {value, done} = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      lineBuf += value;
+      let nl;
+      while ((nl = lineBuf.indexOf('\n')) >= 0) {
+        const line = lineBuf.slice(0, nl).replace(/\r$/, '').trim();
+        lineBuf = lineBuf.slice(nl + 1);
+        handleLine(line);
+      }
+    }
+  }catch(e){
+    logMonitor('Reader stopped: ' + e);
+    showMsg('Serial connection lost', 'bad');
+    clearDumpTimers();
+    if (collecting) { collecting = false; finishDownload(); }
+    try { reader && reader.releaseLock(); } catch(_){}
+    try { writer && writer.releaseLock(); } catch(_){}
+    try { await readableStreamClosed.catch(()=>{}); } catch(_){}
+    try { port && await port.close(); } catch(_){}
+    reader = null; writer = null; port = null;
+    setConnectedUI(false);
+    setPill(els.devStatus, 'Disconnected', 'bad');
+  }
+}
+
+function waitFor(cond, ms){
+  return new Promise(resolve=>{
+    const t0 = Date.now();
+    const iv = setInterval(()=>{
+      if (cond()) { clearInterval(iv); resolve(true); }
+      else if (Date.now() - t0 >= ms) { clearInterval(iv); resolve(false); }
+    }, 50);
+  });
+}
+
+// ------------- Download watchdogs -------------
+let statusSeen = false;
+let dumpStartTimer = null;
+let dumpStallTimer = null;
+let dumpRetries = 0;
+let lastCsvLineAt = 0;
+
+function clearDumpTimers(){
+  if (dumpStartTimer) { clearTimeout(dumpStartTimer); dumpStartTimer = null; }
+  if (dumpStallTimer) { clearInterval(dumpStallTimer); dumpStallTimer = null; }
+}
+
+// Called when [END_CSV] arrives, or when the transfer stalls part-way.
+function completeCsv(complete){
+  collecting = false;
+  clearDumpTimers();
+  const csv = csvLines.join('\n');
+  els.txt.value = csv;
+  finishDownload();
+  try {
+    parseCSV(csv);
+  } catch (e) {
+    logMonitor('CSV parse error: ' + e);
+    showMsg('CSV received but could not be parsed. See serial monitor.', 'bad');
+    return;
+  }
+  logMonitor(`CSV received${complete ? '' : ' (INCOMPLETE)'}: ${csvLines.length} lines, ${flights.length} flight(s)`);
+  if (!complete) {
+    showMsg('Download stopped part-way. Showing what was received – press Download to retry.', 'warn');
+  } else if (!flights.length) {
+    showMsg('No flights stored on the altimeter', 'warn');
+  } else {
+    const aborted = flights.filter(f=>f.aborted).length;
+    showMsg(`Loaded ${flights.length} flight(s)` + (aborted ? `, ${aborted} aborted` : ''), 'ok');
+  }
+}
+
+function handleLine(line){
+  if (!line) return;
+
+  if (line.includes('[BEGIN_CSV]')) {
+    collecting = true;
+    csvLines = [];
+    linesSinceUI = 0;
+    downloadReceived = 0;
+    if (dumpStartTimer) { clearTimeout(dumpStartTimer); dumpStartTimer = null; }
+    if (els.downloadBar.style.display !== 'flex') startDownload(bytesUsed || 0);
+    // Stall watchdog: if lines stop arriving before [END_CSV], show what arrived
+    lastCsvLineAt = Date.now();
+    if (dumpStallTimer) clearInterval(dumpStallTimer);
+    dumpStallTimer = setInterval(()=>{
+      if (collecting && Date.now() - lastCsvLineAt > 4000) completeCsv(false);
+    }, 500);
+    return;
+  }
+
+  if (line.includes('[END_CSV]')) {
+    completeCsv(true);
+    return;
+  }
+
+  if (collecting) {
+    lastCsvLineAt = Date.now();
+    csvLines.push(line);
+    downloadReceived += line.length + 1;
+    if (++linesSinceUI >= 50) { updateDownloadUI(); linesSinceUI = 0; }
+    return;
+  }
+
+  logMonitor(line);
+
+  if (line.startsWith('loggingActive=')) { parseStatus(line); return; }
+
+  if (line.startsWith('FS_ERROR:')) {
+    clearDumpTimers();
+    finishDownload();
+    showMsg('Flash file system unavailable. In Arduino IDE set Tools → Flash Size → 2MB (Sketch: 1MB, FS: 1MB) and re-upload.', 'bad');
+    return;
+  }
+
+  if (line.startsWith('BUSY:')) {
+    clearDumpTimers();
+    finishDownload();
+    showMsg('Altimeter is logging a flight. Download after landing.', 'warn');
+  }
+}
+
+function parseStatus(line){
+  statusSeen = true;
+  const kv = {};
+  line.split(',').forEach(part=>{
+    const [k, v] = part.split('=').map(s=>s && s.trim());
+    if (k) kv[k] = v;
+  });
+  if (kv.fsTotal !== undefined) fsTotalBytes = parseInt(kv.fsTotal) || 0;
+  if (kv.bytes !== undefined) bytesUsed = parseInt(kv.bytes) || 0;
+  updateMemoryUI();
+
+  const state  = kv.state  || (kv.loggingActive === '1' ? 'LOGGING' : 'UNKNOWN');
+  const sensor = kv.sensor || 'UNKNOWN';
+  const next   = kv.nextFlight !== undefined ? kv.nextFlight : '—';
+
+  const fs     = kv.fs || 'UNKNOWN';
+
+  let cls = 'ok';
+  if (sensor === 'FAIL' || fs === 'FAIL' || state === 'ERROR' || state === 'FS_ERROR') cls = 'bad';
+  else if (state === 'LOGGING' || state === 'ARMING') cls = 'warn';
+
+  setPill(els.devStatus, `State: ${state} · Sensor: ${sensor} · Flash: ${fs} · Next flight: ${next}`, cls);
+
+  if (kv.lastFlight !== undefined) {
+    if (kv.lastFlight === '--') {
+      setPill(els.readout, 'LED readout: no completed flight', '');
+    } else {
+      const ap = Math.round(parseFloat(kv.lastApogee));
+      const sp = Math.round(parseFloat(kv.lastMaxSpeed));
+      setPill(els.readout, `LED readout: Flight ${kv.lastFlight} · ${ap} m · ${sp} m/s`, 'ok');
+    }
+  }
+
+  if (fs === 'FAIL') {
+    showMsg('Flash file system unavailable. In Arduino IDE set Tools → Flash Size → 2MB (Sketch: 1MB, FS: 1MB) and re-upload.', 'bad');
+  }
+}
+
+function requestDump(isRetry){
+  if (!isRetry) dumpRetries = 0;
+  clearDumpTimers();
+  startDownload(bytesUsed || 0);
+  showMsg('Downloading…', '');
+  sendLine('DUMP');
+  // If [BEGIN_CSV] does not arrive, ask again (up to 2 retries)
+  dumpStartTimer = setTimeout(()=>{
+    dumpStartTimer = null;
+    if (collecting) return;
+    if (dumpRetries < 2) {
+      dumpRetries++;
+      logMonitor(`No reply to DUMP – retrying (${dumpRetries})`);
+      requestDump(true);
+    } else {
+      finishDownload();
+      showMsg('No data received from the altimeter. Check the connection and press Download.', 'bad');
+    }
+  }, 4000);
+}
+
+async function sendLine(s){
+  if (!writer) return;
+  const data = new TextEncoder().encode(s+'\n');
+  await writer.write(data);
+}
+
+// ------------- Buttons -------------
+els.connect.onclick = connect;
+
+els.get.onclick = ()=> requestDump();
+els.readoutBtn.onclick = async ()=> {
+  await sendLine('READOUT');
+  showMsg('LED readout replaying on the altimeter', 'ok');
+};
+els.clear.onclick = async ()=> {
+  const ok = confirm('Erase ALL data on the altimeter? This cannot be undone.');
+  if (ok) {
+    await sendLine('CLEAR');
+    await sendLine('STATUS');
+    flights = []; currentFlight = null;
+    els.txt.value = '';
+    els.flightDisplay.value = '';
+    if (chart) { chart.data.labels = []; chart.data.datasets[0].data = []; chart.update(); }
+    setMetrics(null);
+    showMsg('Altimeter data erased', 'warn');
+  }
+};
+
+// ---------- Timestamp helper ----------
+function makeTimestamp() {
+  const now = new Date(); // local time
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}_${hh}-${min}`;
+}
+
+// ---------- Save XLSX ----------
+els.saveXlsx.onclick = () => {
+  if (!flights.length) { alert('No flights to save!'); return; }
+  if (typeof XLSX === 'undefined') { alert('XLSX library not loaded. Internet connection required.'); return; }
+  const wb = XLSX.utils.book_new();
+  for (let f of flights) {
+    const rows = [['time_s','alt_m']];
+    for (let i=0;i<f.times.length;i++) rows.push([f.times[i], f.alts[i]]);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+    ws['!cols'] = [{ wch: 12 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws, flightLabel(f).substring(0,31));
+  }
+  const stamp = makeTimestamp();
+  XLSX.writeFile(wb, `Altimeter_${stamp}.xlsx`);
+};
+
+// ---------- Save PDF ----------
+els.savePdf.onclick = async () => {
+  if (!currentFlight) { alert('No flight selected'); return; }
+  if (!window.jspdf || typeof html2canvas === 'undefined') { alert('PDF libraries not loaded. Internet connection required.'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'pt', format:'a4'});
+  const margin = 36;
+  const pageW  = doc.internal.pageSize.getWidth();
+
+  const title = (els.flightName.value||'').trim() || flightLabel(currentFlight);
+  doc.setFont('helvetica','bold'); doc.setFontSize(18);
+  doc.text(title, margin, margin + 6);
+
+  const chartCanvas = els.chartCanvas;
+  const chartURL = chartCanvas.toDataURL('image/png', 1.0);
+  const chartW = Math.floor((pageW - margin*3) * 0.65);
+  const chartH = Math.floor(chartW * (chartCanvas.height / chartCanvas.width));
+  doc.addImage(chartURL, 'PNG', margin, margin + 24, chartW, chartH);
+
+  const metrics = document.getElementById('metrics');
+  const metricsCanvas = await html2canvas(metrics, {backgroundColor:'#ffffff', scale:2});
+  const metricsURL = metricsCanvas.toDataURL('image/png', 1.0);
+  const rightX = margin + chartW + margin;
+  const rightW = pageW - rightX - margin;
+  const rightH = rightW * (metricsCanvas.height/metricsCanvas.width);
+  doc.addImage(metricsURL, 'PNG', rightX, margin + 24, rightW, rightH);
+
+  const stamp = makeTimestamp();
+  doc.save(`Altimeter_${title.replace(/[^\w\-]+/g,'_')}_${stamp}.pdf`);
+};
+
+// Feature check
+if (!('serial' in navigator)){
+  showMsg('This browser does not support Web Serial. Use Chrome or Edge.', 'bad');
+  els.connect.disabled = true;
+}
+setConnectedUI(false);
+// init
+updateMemoryUI();
+</script>
+</body>
+</html>
